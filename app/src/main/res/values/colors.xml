@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="sky">#FF7F93F0</color>
+    <color name="hud_top">#FF5C6FD6</color>
+    <color name="hud_bottom">#FF6F83E6</color>
+    <color name="wall_blue">#FF2B3A9E</color>
+    <color name="duck_yellow">#FFFFD43B</color>
+    <color name="duck_orange">#FFFF9F1C</color>
+    <color name="outline_dark">#FF1B1B2F</color>
+    <color name="overlay_dim">#B3000000</color>
+    <color name="meter_bg">#55000000</color>
+    <color name="meter_fill">#FF3DDC57</color>
+</resources>

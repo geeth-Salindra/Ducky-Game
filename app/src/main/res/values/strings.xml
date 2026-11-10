@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">Ducky</string>
+    <string name="level_format">Level %1$d</string>
+    <string name="neck_label">NECK</string>
+    <string name="reset">RESET</string>
+    <string name="fish_caught">Fish caught!</string>
+    <string name="next_level_format">Level %1$d is next</string>
+    <string name="next_button">NEXT LEVEL</string>
+</resources>
