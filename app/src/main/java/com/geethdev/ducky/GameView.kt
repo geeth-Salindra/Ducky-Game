@@ -103,6 +103,11 @@ class GameView @JvmOverloads constructor(
         }
     }
 
+    fun setStartingLevel(startingLevel: Int) {
+        level = max(1, startingLevel)
+        if (viewW > 0 && wall.isNotEmpty()) newLevel()
+    }
+
     fun resetLevel() {
         if (viewW > 0) newLevel()
     }

@@ -12,6 +12,11 @@ import android.widget.TextView
 
 class MainActivity : Activity(), GameView.GameListener {
 
+    companion object {
+        private const val PREFERENCES_NAME = "ducky_game"
+        private const val KEY_CURRENT_LEVEL = "current_level"
+    }
+
     private lateinit var gameView: GameView
     private lateinit var levelText: TextView
     private lateinit var winSubtitle: TextView
@@ -31,6 +36,8 @@ class MainActivity : Activity(), GameView.GameListener {
         val btnReset: Button = findViewById(R.id.btnReset)
         val btnNext: Button = findViewById(R.id.btnNext)
 
+        val preferences = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
+        gameView.setStartingLevel(preferences.getInt(KEY_CURRENT_LEVEL, 1))
         gameView.setListener(this)
 
         btnReset.setOnClickListener {
@@ -58,6 +65,10 @@ class MainActivity : Activity(), GameView.GameListener {
 
     override fun onLevelChanged(level: Int) {
         levelText.text = getString(R.string.level_format, level)
+        getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
+            .edit()
+            .putInt(KEY_CURRENT_LEVEL, level)
+            .apply()
     }
 
     override fun onNeckChanged(used: Int, max: Int) {
