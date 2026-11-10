@@ -49,6 +49,8 @@ class GameView @JvmOverloads constructor(
         private val C_WALL = 0xFF2B3A9E.toInt()
         private val C_YELLOW = 0xFFFFD43B.toInt()
         private val C_YELLOW_DARK = 0xFFF2B705.toInt()
+        private val C_YELLOW_LIGHT = 0xFFFFE887.toInt()
+        private val C_WING = 0xFFFFC928.toInt()
         private val C_OUTLINE = 0xFF1B1B2F.toInt()
         private val C_ORANGE = 0xFFFF9F1C.toInt()
         private val C_WHITE = 0xFFFFFFFF.toInt()
@@ -406,22 +408,94 @@ class GameView @JvmOverloads constructor(
     }
 
     private fun drawBody(canvas: Canvas) {
-        val r = cell * 0.55f
-        // tail
+        val w = cell * 0.82f
+        val h = cell * 0.55f
         path.reset()
-        path.moveTo(bodyX - r * 0.7f, bodyY)
-        path.lineTo(bodyX - r * 1.5f, bodyY - r * 0.5f)
-        path.lineTo(bodyX - r * 0.6f, bodyY + r * 0.5f)
+        path.moveTo(bodyX - w * 0.48f, bodyY - h * 0.38f)
+        path.cubicTo(
+            bodyX - w * 0.63f, bodyY - h * 0.58f,
+            bodyX - w * 0.78f, bodyY - h * 0.50f,
+            bodyX - w * 0.82f, bodyY - h * 0.34f
+        )
+        path.cubicTo(
+            bodyX - w * 0.73f, bodyY - h * 0.22f,
+            bodyX - w * 0.75f, bodyY - h * 0.13f,
+            bodyX - w * 0.82f, bodyY - h * 0.03f
+        )
+        path.cubicTo(
+            bodyX - w * 0.72f, bodyY + h * 0.04f,
+            bodyX - w * 0.70f, bodyY + h * 0.16f,
+            bodyX - w * 0.60f, bodyY + h * 0.34f
+        )
+        path.cubicTo(
+            bodyX - w * 0.50f, bodyY + h * 0.70f,
+            bodyX + w * 0.28f, bodyY + h * 0.72f,
+            bodyX + w * 0.66f, bodyY + h * 0.36f
+        )
+        path.cubicTo(
+            bodyX + w * 0.94f, bodyY + h * 0.10f,
+            bodyX + w * 0.90f, bodyY - h * 0.28f,
+            bodyX + w * 0.64f, bodyY - h * 0.47f
+        )
+        path.cubicTo(
+            bodyX + w * 0.32f, bodyY - h * 0.76f,
+            bodyX - w * 0.30f, bodyY - h * 0.72f,
+            bodyX - w * 0.52f, bodyY - h * 0.56f
+        )
+        path.cubicTo(
+            bodyX - w * 0.43f, bodyY - h * 0.52f,
+            bodyX - w * 0.46f, bodyY - h * 0.46f,
+            bodyX - w * 0.48f, bodyY - h * 0.38f
+        )
         path.close()
-        fill.color = C_YELLOW
-        canvas.drawPath(path, fill)
 
         fill.color = C_OUTLINE
-        canvas.drawCircle(bodyX, bodyY, r + cell * 0.04f, fill)
+        canvas.drawPath(path, fill)
+        canvas.save()
+        canvas.scale(0.94f, 0.91f, bodyX, bodyY)
         fill.color = C_YELLOW
-        canvas.drawCircle(bodyX, bodyY, r, fill)
+        canvas.drawPath(path, fill)
+        canvas.restore()
+
+        rect.set(
+            bodyX - cell * 0.43f,
+            bodyY - cell * 0.10f,
+            bodyX + cell * 0.35f,
+            bodyY + cell * 0.34f
+        )
+        fill.color = C_OUTLINE
+        canvas.drawOval(rect, fill)
+        rect.inset(cell * 0.035f, cell * 0.035f)
+        fill.color = C_WING
+        canvas.drawOval(rect, fill)
+
+        path.reset()
+        path.moveTo(bodyX - cell * 0.27f, bodyY + cell * 0.12f)
+        path.cubicTo(
+            bodyX - cell * 0.10f, bodyY + cell * 0.30f,
+            bodyX + cell * 0.13f, bodyY + cell * 0.29f,
+            bodyX + cell * 0.27f, bodyY + cell * 0.16f
+        )
+        stroke.color = C_YELLOW_DARK
+        stroke.strokeWidth = cell * 0.035f
+        canvas.drawPath(path, stroke)
+
+        fill.color = C_YELLOW_LIGHT
+        rect.set(
+            bodyX - cell * 0.38f,
+            bodyY - cell * 0.35f,
+            bodyX - cell * 0.08f,
+            bodyY - cell * 0.25f
+        )
+        canvas.drawOval(rect, fill)
+
         fill.color = C_YELLOW_DARK
-        rect.set(bodyX - r * 0.75f, bodyY - r * 0.1f, bodyX + r * 0.1f, bodyY + r * 0.6f)
+        rect.set(
+            bodyX + cell * 0.38f,
+            bodyY + cell * 0.27f,
+            bodyX + cell * 0.62f,
+            bodyY + cell * 0.36f
+        )
         canvas.drawOval(rect, fill)
     }
 
