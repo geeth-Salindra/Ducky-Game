@@ -95,6 +95,9 @@ class GameView @JvmOverloads constructor(
 
     // ------------------------------------------------------------ public API
 
+    val currentLevel: Int
+        get() = level
+
     fun setListener(l: GameListener?) {
         gameListener = l
         if (wall.isNotEmpty()) {

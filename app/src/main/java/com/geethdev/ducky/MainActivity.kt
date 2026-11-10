@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
@@ -21,6 +22,8 @@ class MainActivity : Activity(), GameView.GameListener {
         private const val KEY_HIGH_SCORE = "high_score"
         private const val KEY_HIGHEST_COMPLETED_LEVEL = "highest_completed_level"
         private const val LOADING_DURATION_MS = 500L
+        private const val TIMER_UPDATE_INTERVAL_MS = 50L
+        private const val KEY_LAST_CLEAR_TIME_PREFIX = "last_clear_time_"
     }
 
     private lateinit var gameView: GameView
@@ -28,12 +31,24 @@ class MainActivity : Activity(), GameView.GameListener {
     private lateinit var homeScreen: View
     private lateinit var levelsScreen: View
     private lateinit var highScoreText: TextView
+    private lateinit var timerText: TextView
     private lateinit var levelsGrid: GridLayout
     private lateinit var levelsEmptyText: TextView
     private lateinit var levelText: TextView
     private lateinit var winSubtitle: TextView
     private lateinit var neckBar: ProgressBar
     private lateinit var winOverlay: View
+    private val timerHandler = Handler(Looper.getMainLooper())
+    private var timerStartedAt = 0L
+    private var timerLevel = 0
+    private var timerRunning = false
+    private val timerUpdate = object : Runnable {
+        override fun run() {
+            if (!timerRunning) return
+            updateTimerText(SystemClock.elapsedRealtime() - timerStartedAt)
+            timerHandler.postDelayed(this, TIMER_UPDATE_INTERVAL_MS)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,6 +60,7 @@ class MainActivity : Activity(), GameView.GameListener {
         levelsScreen = findViewById(R.id.levelsScreen)
         val loadingScreen: View = findViewById(R.id.loadingScreen)
         highScoreText = findViewById(R.id.highScoreText)
+        timerText = findViewById(R.id.timerText)
         levelsGrid = findViewById(R.id.levelsGrid)
         levelsEmptyText = findViewById(R.id.levelsEmptyText)
         gameView = findViewById(R.id.gameView)
@@ -74,6 +90,7 @@ class MainActivity : Activity(), GameView.GameListener {
             gameView.setStartingLevel(highestLevel)
             homeScreen.visibility = View.GONE
             gameScreen.visibility = View.VISIBLE
+            startLevelTimer(highestLevel)
         }
         btnLevels.setOnClickListener {
             homeScreen.visibility = View.GONE
@@ -84,10 +101,12 @@ class MainActivity : Activity(), GameView.GameListener {
         btnReset.setOnClickListener {
             winOverlay.visibility = View.GONE
             gameView.resetLevel()
+            startLevelTimer(gameView.currentLevel)
         }
         btnNext.setOnClickListener {
             winOverlay.visibility = View.GONE
             gameView.nextLevel()
+            startLevelTimer(gameView.currentLevel)
         }
 
         Handler(Looper.getMainLooper()).postDelayed({
@@ -105,8 +124,8 @@ class MainActivity : Activity(), GameView.GameListener {
     }
 
     private fun updateLevels() {
-        val highestCompleted = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
-            .getInt(KEY_HIGHEST_COMPLETED_LEVEL, 0)
+        val preferences = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
+        val highestCompleted = preferences.getInt(KEY_HIGHEST_COMPLETED_LEVEL, 0)
         levelsGrid.removeAllViews()
         levelsEmptyText.visibility = if (highestCompleted == 0) View.VISIBLE else View.GONE
         val density = resources.displayMetrics.density
@@ -115,10 +134,15 @@ class MainActivity : Activity(), GameView.GameListener {
         ).coerceAtLeast((64 * density).toInt())
 
         for (level in 1..highestCompleted) {
+            val lastClearTime = if (preferences.contains(lastClearTimeKey(level))) {
+                formatElapsedTime(preferences.getLong(lastClearTimeKey(level), 0L))
+            } else {
+                getString(R.string.no_clear_time)
+            }
             val button = Button(this).apply {
-                text = getString(R.string.completed_level_format, level)
+                text = getString(R.string.completed_level_format, level, lastClearTime)
                 setTextColor(getColor(R.color.outline_dark))
-                textSize = 14f
+                textSize = 12f
                 isAllCaps = false
                 background = getDrawable(R.drawable.bg_button)
                 setOnClickListener {
@@ -126,6 +150,7 @@ class MainActivity : Activity(), GameView.GameListener {
                     winOverlay.visibility = View.GONE
                     levelsScreen.visibility = View.GONE
                     gameScreen.visibility = View.VISIBLE
+                    startLevelTimer(level)
                 }
             }
             val params = GridLayout.LayoutParams().apply {
@@ -138,6 +163,7 @@ class MainActivity : Activity(), GameView.GameListener {
     }
 
     private fun showHomeScreen() {
+        stopLevelTimer()
         levelsScreen.visibility = View.GONE
         gameScreen.visibility = View.GONE
         homeScreen.visibility = View.VISIBLE
@@ -171,6 +197,9 @@ class MainActivity : Activity(), GameView.GameListener {
 
     override fun onLevelChanged(level: Int) {
         levelText.text = getString(R.string.level_format, level)
+        if (gameScreen.visibility == View.VISIBLE && (!timerRunning || timerLevel != level)) {
+            startLevelTimer(level)
+        }
         val preferences = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
         val highScore = maxOf(preferences.getInt(KEY_HIGH_SCORE, 1), level)
         preferences.edit()
@@ -189,14 +218,56 @@ class MainActivity : Activity(), GameView.GameListener {
     }
 
     override fun onWin(level: Int) {
+        val clearTime = stopLevelTimer()
         val preferences = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
         preferences.edit()
             .putInt(
                 KEY_HIGHEST_COMPLETED_LEVEL,
                 maxOf(preferences.getInt(KEY_HIGHEST_COMPLETED_LEVEL, 0), level)
             )
+            .putLong(lastClearTimeKey(level), clearTime)
             .apply()
         winSubtitle.text = getString(R.string.next_level_format, level + 1)
         winOverlay.visibility = View.VISIBLE
     }
+
+    private fun startLevelTimer(level: Int) {
+        timerLevel = level
+        timerStartedAt = SystemClock.elapsedRealtime()
+        timerRunning = true
+        timerHandler.removeCallbacks(timerUpdate)
+        updateTimerText(0L)
+        timerHandler.post(timerUpdate)
+    }
+
+    private fun stopLevelTimer(): Long {
+        val elapsed = if (timerRunning) {
+            SystemClock.elapsedRealtime() - timerStartedAt
+        } else {
+            0L
+        }
+        timerRunning = false
+        timerHandler.removeCallbacks(timerUpdate)
+        updateTimerText(elapsed)
+        return elapsed
+    }
+
+    private fun updateTimerText(elapsedMs: Long) {
+        timerText.text = formatElapsedTime(elapsedMs)
+    }
+
+    private fun formatElapsedTime(elapsedMs: Long): String {
+        val totalCentiseconds = elapsedMs.coerceAtLeast(0L) / 10L
+        val minutes = totalCentiseconds / 6_000L
+        val seconds = (totalCentiseconds / 100L) % 60L
+        val centiseconds = totalCentiseconds % 100L
+        return getString(
+            R.string.elapsed_time_format,
+            minutes,
+            seconds,
+            centiseconds
+        )
+    }
+
+    private fun lastClearTimeKey(level: Int): String = "$KEY_LAST_CLEAR_TIME_PREFIX$level"
 }

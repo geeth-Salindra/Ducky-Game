@@ -1,6 +1,8 @@
 <resources>
     <string name="app_name">Ducky</string>
     <string name="level_format">Level %1$d</string>
+    <string name="elapsed_time_initial">00:00.00</string>
+    <string name="elapsed_time_format">%1$02d:%2$02d.%3$02d</string>
     <string name="neck_label">NECK</string>
     <string name="reset">RESET</string>
     <string name="fish_caught">Fish caught!</string>
@@ -14,5 +16,6 @@
     <string name="levels">LEVELS</string>
     <string name="back">BACK</string>
     <string name="no_completed_levels">Complete a level to unlock it here.</string>
-    <string name="completed_level_format">Level %1$d</string>
+    <string name="completed_level_format">Level %1$d\nLast: %2$s</string>
+    <string name="no_clear_time">--:--.--</string>
 </resources>
