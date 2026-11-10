@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
@@ -15,9 +17,14 @@ class MainActivity : Activity(), GameView.GameListener {
     companion object {
         private const val PREFERENCES_NAME = "ducky_game"
         private const val KEY_CURRENT_LEVEL = "current_level"
+        private const val KEY_HIGH_SCORE = "high_score"
+        private const val LOADING_DURATION_MS = 500L
     }
 
     private lateinit var gameView: GameView
+    private lateinit var gameScreen: View
+    private lateinit var homeScreen: View
+    private lateinit var highScoreText: TextView
     private lateinit var levelText: TextView
     private lateinit var winSubtitle: TextView
     private lateinit var neckBar: ProgressBar
@@ -28,6 +35,10 @@ class MainActivity : Activity(), GameView.GameListener {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_main)
 
+        gameScreen = findViewById(R.id.gameScreen)
+        homeScreen = findViewById(R.id.homeScreen)
+        val loadingScreen: View = findViewById(R.id.loadingScreen)
+        highScoreText = findViewById(R.id.highScoreText)
         gameView = findViewById(R.id.gameView)
         levelText = findViewById(R.id.levelText)
         winSubtitle = findViewById(R.id.winSubtitle)
@@ -35,11 +46,17 @@ class MainActivity : Activity(), GameView.GameListener {
         winOverlay = findViewById(R.id.winOverlay)
         val btnReset: Button = findViewById(R.id.btnReset)
         val btnNext: Button = findViewById(R.id.btnNext)
+        val btnStartGame: Button = findViewById(R.id.btnStartGame)
 
         val preferences = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
         gameView.setStartingLevel(preferences.getInt(KEY_CURRENT_LEVEL, 1))
         gameView.setListener(this)
+        updateHighScore()
 
+        btnStartGame.setOnClickListener {
+            homeScreen.visibility = View.GONE
+            gameScreen.visibility = View.VISIBLE
+        }
         btnReset.setOnClickListener {
             winOverlay.visibility = View.GONE
             gameView.resetLevel()
@@ -47,6 +64,31 @@ class MainActivity : Activity(), GameView.GameListener {
         btnNext.setOnClickListener {
             winOverlay.visibility = View.GONE
             gameView.nextLevel()
+        }
+
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (!isFinishing) {
+                loadingScreen.visibility = View.GONE
+                homeScreen.visibility = View.VISIBLE
+            }
+        }, LOADING_DURATION_MS)
+    }
+
+    private fun updateHighScore() {
+        val highScore = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
+            .getInt(KEY_HIGH_SCORE, 1)
+        highScoreText.text = getString(R.string.high_score_format, highScore)
+    }
+
+    @Deprecated("Deprecated in Android")
+    override fun onBackPressed() {
+        if (gameScreen.visibility == View.VISIBLE) {
+            winOverlay.visibility = View.GONE
+            gameScreen.visibility = View.GONE
+            homeScreen.visibility = View.VISIBLE
+            updateHighScore()
+        } else {
+            super.onBackPressed()
         }
     }
 
@@ -65,10 +107,13 @@ class MainActivity : Activity(), GameView.GameListener {
 
     override fun onLevelChanged(level: Int) {
         levelText.text = getString(R.string.level_format, level)
-        getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
-            .edit()
+        val preferences = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
+        val highScore = maxOf(preferences.getInt(KEY_HIGH_SCORE, 1), level)
+        preferences.edit()
             .putInt(KEY_CURRENT_LEVEL, level)
+            .putInt(KEY_HIGH_SCORE, highScore)
             .apply()
+        updateHighScore()
     }
 
     override fun onNeckChanged(used: Int, max: Int) {

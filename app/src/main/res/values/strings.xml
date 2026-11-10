@@ -6,4 +6,9 @@
     <string name="fish_caught">Fish caught!</string>
     <string name="next_level_format">Level %1$d is next</string>
     <string name="next_button">NEXT LEVEL</string>
+    <string name="home_subtitle">Catch fish and make your way through the maze!</string>
+    <string name="high_score_label">HIGH SCORE</string>
+    <string name="high_score_format">Level %1$d</string>
+    <string name="start_game">START GAME</string>
+    <string name="loading">Loading...</string>
 </resources>
