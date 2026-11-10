@@ -121,6 +121,18 @@
                     android:textColor="@color/white"
                     android:textSize="20sp" />
 
+                <TextView
+                    android:id="@+id/rewardedAdStatus"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="24dp"
+                    android:layout_marginTop="18dp"
+                    android:layout_marginEnd="24dp"
+                    android:gravity="center"
+                    android:text="@string/rewarded_ad_loading"
+                    android:textColor="@color/white"
+                    android:textSize="14sp" />
+
                 <Button
                     android:id="@+id/btnNext"
                     android:layout_width="wrap_content"
@@ -131,9 +143,25 @@
                     android:minHeight="0dp"
                     android:paddingStart="32dp"
                     android:paddingEnd="32dp"
-                    android:text="@string/next_button"
+                    android:enabled="false"
+                    android:text="@string/rewarded_ad_loading_button"
                     android:textColor="@color/outline_dark"
                     android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btnWinHome"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/bg_button"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp"
+                    android:paddingStart="36dp"
+                    android:paddingEnd="36dp"
+                    android:text="@string/home"
+                    android:textColor="@color/outline_dark"
+                    android:textSize="14sp"
                     android:textStyle="bold" />
             </LinearLayout>
         </FrameLayout>
@@ -146,6 +174,7 @@
         android:gravity="center"
         android:orientation="vertical"
         android:padding="32dp"
+        android:paddingBottom="88dp"
         android:visibility="gone">
 
         <ImageView
@@ -232,7 +261,7 @@
         android:paddingStart="20dp"
         android:paddingTop="18dp"
         android:paddingEnd="20dp"
-        android:paddingBottom="12dp"
+        android:paddingBottom="76dp"
         android:visibility="gone">
 
         <LinearLayout
@@ -373,4 +402,13 @@
             android:textColor="@color/white"
             android:textSize="16sp" />
     </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/bannerAdContainer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:background="@color/white"
+        android:gravity="center"
+        android:visibility="gone" />
 </FrameLayout>

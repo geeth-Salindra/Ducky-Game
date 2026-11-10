@@ -7,18 +7,32 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.GridLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import com.google.android.gms.ads.AdListener
+import com.google.android.gms.ads.AdRequest
+import com.google.android.gms.ads.AdSize
+import com.google.android.gms.ads.AdView
+import com.google.android.gms.ads.FullScreenContentCallback
+import com.google.android.gms.ads.LoadAdError
+import com.google.android.gms.ads.MobileAds
+import com.google.android.gms.ads.rewarded.RewardedAd
+import com.google.android.gms.ads.rewarded.RewardedAdLoadCallback
 
 class MainActivity : Activity(), GameView.GameListener {
 
     companion object {
+        private const val TAG = "DuckyAds"
+        private const val BANNER_AD_UNIT_ID = "ca-app-pub-3940256099942544/6300978111"
+        private const val REWARDED_AD_UNIT_ID = "ca-app-pub-3940256099942544/5224354917"
         private const val PREFERENCES_NAME = "ducky_game"
         private const val KEY_CURRENT_LEVEL = "current_level"
         private const val KEY_HIGH_SCORE = "high_score"
@@ -39,8 +53,15 @@ class MainActivity : Activity(), GameView.GameListener {
     private lateinit var levelsProgressText: TextView
     private lateinit var levelText: TextView
     private lateinit var winSubtitle: TextView
+    private lateinit var rewardedAdStatus: TextView
+    private lateinit var btnNext: Button
     private lateinit var neckBar: ProgressBar
     private lateinit var winOverlay: View
+    private lateinit var bannerAdContainer: FrameLayout
+    private var bannerAd: AdView? = null
+    private var rewardedAd: RewardedAd? = null
+    private var isRewardedAdLoading = false
+    private var rewardEarned = false
     private val timerHandler = Handler(Looper.getMainLooper())
     private var timerStartedAt = 0L
     private var timerLevel = 0
@@ -70,10 +91,13 @@ class MainActivity : Activity(), GameView.GameListener {
         gameView = findViewById(R.id.gameView)
         levelText = findViewById(R.id.levelText)
         winSubtitle = findViewById(R.id.winSubtitle)
+        rewardedAdStatus = findViewById(R.id.rewardedAdStatus)
         neckBar = findViewById(R.id.neckBar)
         winOverlay = findViewById(R.id.winOverlay)
+        bannerAdContainer = findViewById(R.id.bannerAdContainer)
         val btnReset: Button = findViewById(R.id.btnReset)
-        val btnNext: Button = findViewById(R.id.btnNext)
+        btnNext = findViewById(R.id.btnNext)
+        val btnWinHome: Button = findViewById(R.id.btnWinHome)
         val btnStartGame: Button = findViewById(R.id.btnStartGame)
         val btnLevels: Button = findViewById(R.id.btnLevels)
         val btnLevelsBack: Button = findViewById(R.id.btnLevelsBack)
@@ -93,6 +117,7 @@ class MainActivity : Activity(), GameView.GameListener {
                 .getInt(KEY_HIGH_SCORE, 1)
             gameView.setStartingLevel(highestLevel)
             homeScreen.visibility = View.GONE
+            hideMenuBanner()
             gameScreen.visibility = View.VISIBLE
             startLevelTimer(highestLevel)
         }
@@ -100,6 +125,7 @@ class MainActivity : Activity(), GameView.GameListener {
             homeScreen.visibility = View.GONE
             levelsScreen.visibility = View.VISIBLE
             updateLevels()
+            showMenuBanner()
         }
         btnLevelsBack.setOnClickListener { showHomeScreen() }
         btnReset.setOnClickListener {
@@ -108,10 +134,15 @@ class MainActivity : Activity(), GameView.GameListener {
             startLevelTimer(gameView.currentLevel)
         }
         btnNext.setOnClickListener {
-            winOverlay.visibility = View.GONE
-            gameView.nextLevel()
-            startLevelTimer(gameView.currentLevel)
+            val ad = rewardedAd
+            if (ad == null) {
+                loadRewardedAd()
+            } else {
+                showRewardedAd(ad)
+            }
         }
+        btnWinHome.setOnClickListener { showHomeScreen() }
+        initializeAds()
 
         Handler(Looper.getMainLooper()).postDelayed({
             if (!isFinishing) {
@@ -119,6 +150,141 @@ class MainActivity : Activity(), GameView.GameListener {
                 homeScreen.visibility = View.VISIBLE
             }
         }, LOADING_DURATION_MS)
+    }
+
+    private fun initializeAds() {
+        MobileAds.initialize(this) {
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                createBannerAd()
+                loadRewardedAd()
+            }
+        }
+    }
+
+    private fun createBannerAd() {
+        val adView = AdView(this)
+        adView.adUnitId = BANNER_AD_UNIT_ID
+        val widthDp = (resources.displayMetrics.widthPixels / resources.displayMetrics.density).toInt()
+        adView.setAdSize(
+            AdSize.getCurrentOrientationAnchoredAdaptiveBannerAdSize(this, widthDp)
+        )
+        adView.adListener = object : AdListener() {
+            override fun onAdLoaded() {
+                showMenuBanner()
+            }
+
+            override fun onAdFailedToLoad(error: LoadAdError) {
+                Log.w(TAG, "Banner ad failed to load: ${error.message}")
+                bannerAdContainer.visibility = View.GONE
+            }
+        }
+        bannerAdContainer.removeAllViews()
+        bannerAdContainer.addView(
+            adView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER
+            )
+        )
+        bannerAd = adView
+        adView.loadAd(AdRequest.Builder().build())
+    }
+
+    private fun showMenuBanner() {
+        bannerAdContainer.visibility =
+            if (levelsScreen.visibility == View.VISIBLE && bannerAd != null) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
+    }
+
+    private fun hideMenuBanner() {
+        bannerAdContainer.visibility = View.GONE
+    }
+
+    private fun loadRewardedAd() {
+        if (isRewardedAdLoading || rewardedAd != null || isFinishing || isDestroyed) return
+
+        isRewardedAdLoading = true
+        updateRewardedAdPrompt()
+        RewardedAd.load(
+            this,
+            REWARDED_AD_UNIT_ID,
+            AdRequest.Builder().build(),
+            object : RewardedAdLoadCallback() {
+                override fun onAdLoaded(ad: RewardedAd) {
+                    isRewardedAdLoading = false
+                    rewardedAd = ad
+                    updateRewardedAdPrompt()
+                }
+
+                override fun onAdFailedToLoad(error: LoadAdError) {
+                    isRewardedAdLoading = false
+                    rewardedAd = null
+                    Log.w(TAG, "Rewarded ad failed to load: ${error.message}")
+                    updateRewardedAdPrompt()
+                }
+            }
+        )
+    }
+
+    private fun updateRewardedAdPrompt() {
+        when {
+            rewardedAd != null -> {
+                rewardedAdStatus.setText(R.string.rewarded_ad_ready)
+                btnNext.setText(R.string.watch_ad_to_continue)
+                btnNext.isEnabled = true
+            }
+            isRewardedAdLoading -> {
+                rewardedAdStatus.setText(R.string.rewarded_ad_loading)
+                btnNext.setText(R.string.rewarded_ad_loading_button)
+                btnNext.isEnabled = false
+            }
+            else -> {
+                rewardedAdStatus.setText(R.string.rewarded_ad_unavailable)
+                btnNext.setText(R.string.retry_ad)
+                btnNext.isEnabled = true
+            }
+        }
+    }
+
+    private fun showRewardedAd(ad: RewardedAd) {
+        rewardedAd = null
+        rewardEarned = false
+        btnNext.isEnabled = false
+        rewardedAdStatus.setText(R.string.rewarded_ad_watch_to_continue)
+        ad.fullScreenContentCallback = object : FullScreenContentCallback() {
+            override fun onAdDismissedFullScreenContent() {
+                if (rewardEarned) {
+                    startNextLevel()
+                    loadRewardedAd()
+                } else {
+                    rewardedAdStatus.setText(R.string.rewarded_ad_not_completed)
+                    loadRewardedAd()
+                }
+            }
+
+            override fun onAdFailedToShowFullScreenContent(error: com.google.android.gms.ads.AdError) {
+                Log.w(TAG, "Rewarded ad failed to show: ${error.message}")
+                rewardedAdStatus.setText(R.string.rewarded_ad_unavailable)
+                updateRewardedAdPrompt()
+                loadRewardedAd()
+            }
+        }
+        ad.show(this) {
+            rewardEarned = true
+            rewardedAdStatus.setText(R.string.rewarded_ad_reward_earned)
+        }
+    }
+
+    private fun startNextLevel() {
+        winOverlay.visibility = View.GONE
+        btnNext.isEnabled = true
+        gameView.nextLevel()
+        startLevelTimer(gameView.currentLevel)
     }
 
     private fun updateHighScore() {
@@ -173,6 +339,7 @@ class MainActivity : Activity(), GameView.GameListener {
                     gameView.setStartingLevel(level)
                     winOverlay.visibility = View.GONE
                     levelsScreen.visibility = View.GONE
+                    hideMenuBanner()
                     gameScreen.visibility = View.VISIBLE
                     startLevelTimer(level)
                 }
@@ -215,9 +382,11 @@ class MainActivity : Activity(), GameView.GameListener {
 
     private fun showHomeScreen() {
         stopLevelTimer()
+        winOverlay.visibility = View.GONE
         levelsScreen.visibility = View.GONE
         gameScreen.visibility = View.GONE
         homeScreen.visibility = View.VISIBLE
+        showMenuBanner()
         updateHighScore()
     }
 
@@ -280,6 +449,10 @@ class MainActivity : Activity(), GameView.GameListener {
             .apply()
         winSubtitle.text = getString(R.string.next_level_format, level + 1)
         winOverlay.visibility = View.VISIBLE
+        updateRewardedAdPrompt()
+        if (rewardedAd == null && !isRewardedAdLoading) {
+            loadRewardedAd()
+        }
     }
 
     private fun startLevelTimer(level: Int) {
@@ -321,4 +494,20 @@ class MainActivity : Activity(), GameView.GameListener {
     }
 
     private fun lastClearTimeKey(level: Int): String = "$KEY_LAST_CLEAR_TIME_PREFIX$level"
+
+    override fun onResume() {
+        super.onResume()
+        bannerAd?.resume()
+    }
+
+    override fun onPause() {
+        bannerAd?.pause()
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        bannerAd?.destroy()
+        bannerAd = null
+        super.onDestroy()
+    }
 }
