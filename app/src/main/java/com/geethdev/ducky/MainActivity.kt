@@ -7,10 +7,12 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.GridLayout
+import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 
@@ -34,6 +36,7 @@ class MainActivity : Activity(), GameView.GameListener {
     private lateinit var timerText: TextView
     private lateinit var levelsGrid: GridLayout
     private lateinit var levelsEmptyText: TextView
+    private lateinit var levelsProgressText: TextView
     private lateinit var levelText: TextView
     private lateinit var winSubtitle: TextView
     private lateinit var neckBar: ProgressBar
@@ -63,6 +66,7 @@ class MainActivity : Activity(), GameView.GameListener {
         timerText = findViewById(R.id.timerText)
         levelsGrid = findViewById(R.id.levelsGrid)
         levelsEmptyText = findViewById(R.id.levelsEmptyText)
+        levelsProgressText = findViewById(R.id.levelsProgressText)
         gameView = findViewById(R.id.gameView)
         levelText = findViewById(R.id.levelText)
         winSubtitle = findViewById(R.id.winSubtitle)
@@ -129,9 +133,17 @@ class MainActivity : Activity(), GameView.GameListener {
         levelsGrid.removeAllViews()
         levelsEmptyText.visibility = if (highestCompleted == 0) View.VISIBLE else View.GONE
         val density = resources.displayMetrics.density
-        val tileSize = (
-            (resources.displayMetrics.widthPixels - (40 * density).toInt() - 24) / 3
-        ).coerceAtLeast((64 * density).toInt())
+        val screenWidthDp = resources.displayMetrics.widthPixels / density
+        val tileWidth = ((screenWidthDp - 40f - 30f) / 3f * density)
+            .toInt()
+            .coerceAtLeast((64 * density).toInt())
+        val tileHeight = (116 * density).toInt()
+        val tileMargin = (5 * density).toInt()
+        levelsProgressText.text = resources.getQuantityString(
+            R.plurals.levels_completed_count,
+            highestCompleted,
+            highestCompleted
+        )
 
         for (level in 1..highestCompleted) {
             val lastClearTime = if (preferences.contains(lastClearTimeKey(level))) {
@@ -139,12 +151,24 @@ class MainActivity : Activity(), GameView.GameListener {
             } else {
                 getString(R.string.no_clear_time)
             }
-            val button = Button(this).apply {
-                text = getString(R.string.completed_level_format, level, lastClearTime)
-                setTextColor(getColor(R.color.outline_dark))
-                textSize = 12f
-                isAllCaps = false
-                background = getDrawable(R.drawable.bg_button)
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(
+                    (6 * density).toInt(),
+                    (10 * density).toInt(),
+                    (6 * density).toInt(),
+                    (10 * density).toInt()
+                )
+                background = getDrawable(R.drawable.bg_level_card)
+                elevation = 3 * density
+                isClickable = true
+                isFocusable = true
+                contentDescription = getString(
+                    R.string.level_tile_content_description,
+                    level,
+                    lastClearTime
+                )
                 setOnClickListener {
                     gameView.setStartingLevel(level)
                     winOverlay.visibility = View.GONE
@@ -153,12 +177,39 @@ class MainActivity : Activity(), GameView.GameListener {
                     startLevelTimer(level)
                 }
             }
-            val params = GridLayout.LayoutParams().apply {
-                width = tileSize
-                height = tileSize
-                setMargins(4, 4, 4, 4)
+
+            val levelNumber = TextView(this).apply {
+                text = level.toString()
+                setTextColor(getColor(R.color.outline_dark))
+                textSize = 30f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                gravity = Gravity.CENTER
             }
-            levelsGrid.addView(button, params)
+            val completedLabel = TextView(this).apply {
+                text = getString(R.string.level_completed)
+                setTextColor(getColor(R.color.hud_top))
+                textSize = 9f
+                letterSpacing = 0.06f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                gravity = Gravity.CENTER
+            }
+            val timeLabel = TextView(this).apply {
+                text = getString(R.string.level_last_time_format, lastClearTime)
+                setTextColor(getColor(R.color.outline_dark))
+                textSize = 10f
+                gravity = Gravity.CENTER
+                maxLines = 1
+            }
+            card.addView(levelNumber)
+            card.addView(completedLabel)
+            card.addView(timeLabel)
+
+            val params = GridLayout.LayoutParams().apply {
+                width = tileWidth
+                height = tileHeight
+                setMargins(tileMargin, tileMargin, tileMargin, tileMargin)
+            }
+            levelsGrid.addView(card, params)
         }
     }
 

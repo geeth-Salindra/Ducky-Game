@@ -14,6 +14,15 @@
     <string name="start_game">START GAME</string>
     <string name="loading">Loading...</string>
     <string name="levels">LEVELS</string>
+    <string name="levels_subtitle">Pick a level to play again</string>
+    <string name="levels_progress_label">YOUR PROGRESS</string>
+    <plurals name="levels_completed_count">
+        <item quantity="one">%1$d level completed</item>
+        <item quantity="other">%1$d levels completed</item>
+    </plurals>
+    <string name="level_completed">COMPLETED</string>
+    <string name="level_last_time_format">Last %1$s</string>
+    <string name="level_tile_content_description">Level %1$d completed. Last time %2$s.</string>
     <string name="back">BACK</string>
     <string name="no_completed_levels">Complete a level to unlock it here.</string>
     <string name="completed_level_format">Level %1$d\nLast: %2$s</string>
