@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Original palette (kept so GameView keeps rendering exactly the same) -->
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
     <color name="sky">#FF7F93F0</color>
@@ -12,4 +13,39 @@
     <color name="overlay_dim">#B3000000</color>
     <color name="meter_bg">#55000000</color>
     <color name="meter_fill">#FF3DDC57</color>
+
+    <!-- Menu background gradient -->
+    <color name="menu_top">#FF93A5F8</color>
+    <color name="menu_bottom">#FF4A5BC4</color>
+
+    <!-- Text -->
+    <color name="text_secondary">#D9FFFFFF</color>
+    <color name="text_muted">#99FFFFFF</color>
+
+    <!-- Glass surfaces -->
+    <color name="glass_fill">#2EFFFFFF</color>
+    <color name="glass_fill_pressed">#4DFFFFFF</color>
+    <color name="glass_stroke">#66FFFFFF</color>
+
+    <!-- Primary button (3D key style) -->
+    <color name="duck_yellow_light">#FFFFE27A</color>
+    <color name="duck_orange_lip">#FFD27A00</color>
+    <color name="duck_orange_pressed">#FFF2A100</color>
+
+    <!-- Disabled button -->
+    <color name="disabled_face_top">#FFD3D6E4</color>
+    <color name="disabled_face_bottom">#FFB9BDD0</color>
+    <color name="disabled_lip">#FF8D92AA</color>
+    <color name="disabled_text">#FF5B5F78</color>
+
+    <!-- Win dialog -->
+    <color name="dialog_top">#FF4859CF</color>
+    <color name="dialog_bottom">#FF2B3A9E</color>
+
+    <!-- Level cards -->
+    <color name="card_cream">#FFFFF9E8</color>
+    <color name="card_cream_lip">#FFE6D5A0</color>
+    <color name="card_cream_pressed">#FFFFE8A6</color>
+    <color name="success_bg">#FFD7F7DD</color>
+    <color name="success_text">#FF1E7B34</color>
 </resources>

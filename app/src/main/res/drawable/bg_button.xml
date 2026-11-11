@@ -1,17 +1,72 @@
 <?xml version="1.0" encoding="utf-8"?>
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:state_pressed="true">
-        <shape android:shape="rectangle">
-            <solid android:color="#FFE59400" />
-            <corners android:radius="24dp" />
-            <stroke android:width="2dp" android:color="@color/outline_dark" />
-        </shape>
+
+    <!-- Disabled -->
+    <item android:state_enabled="false">
+        <layer-list>
+            <item>
+                <shape android:shape="rectangle">
+                    <solid android:color="@color/disabled_lip" />
+                    <corners android:radius="22dp" />
+                    <stroke android:width="2dp" android:color="@color/disabled_text" />
+                </shape>
+            </item>
+            <item android:bottom="4dp">
+                <shape android:shape="rectangle">
+                    <gradient
+                        android:angle="270"
+                        android:startColor="@color/disabled_face_top"
+                        android:endColor="@color/disabled_face_bottom" />
+                    <corners android:radius="22dp" />
+                    <stroke android:width="2dp" android:color="@color/disabled_text" />
+                </shape>
+            </item>
+        </layer-list>
     </item>
+
+    <!-- Pressed: face sinks into the lip -->
+    <item android:state_pressed="true">
+        <layer-list>
+            <item>
+                <shape android:shape="rectangle">
+                    <solid android:color="@color/duck_orange_lip" />
+                    <corners android:radius="22dp" />
+                    <stroke android:width="2dp" android:color="@color/outline_dark" />
+                </shape>
+            </item>
+            <item android:top="2dp" android:bottom="2dp">
+                <shape android:shape="rectangle">
+                    <gradient
+                        android:angle="270"
+                        android:startColor="@color/duck_orange"
+                        android:endColor="@color/duck_orange_pressed" />
+                    <corners android:radius="22dp" />
+                    <stroke android:width="2dp" android:color="@color/outline_dark" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+
+    <!-- Normal -->
     <item>
-        <shape android:shape="rectangle">
-            <solid android:color="@color/duck_orange" />
-            <corners android:radius="24dp" />
-            <stroke android:width="2dp" android:color="@color/outline_dark" />
-        </shape>
+        <layer-list>
+            <item>
+                <shape android:shape="rectangle">
+                    <solid android:color="@color/duck_orange_lip" />
+                    <corners android:radius="22dp" />
+                    <stroke android:width="2dp" android:color="@color/outline_dark" />
+                </shape>
+            </item>
+            <item android:bottom="4dp">
+                <shape android:shape="rectangle">
+                    <gradient
+                        android:angle="270"
+                        android:startColor="@color/duck_yellow_light"
+                        android:endColor="@color/duck_orange" />
+                    <corners android:radius="22dp" />
+                    <stroke android:width="2dp" android:color="@color/outline_dark" />
+                </shape>
+            </item>
+        </layer-list>
     </item>
 </selector>

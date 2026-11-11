@@ -1,16 +1,20 @@
 package com.geethdev.ducky
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.animation.OvershootInterpolator
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.GridLayout
@@ -57,6 +61,7 @@ class MainActivity : Activity(), GameView.GameListener {
     private lateinit var btnNext: Button
     private lateinit var neckBar: ProgressBar
     private lateinit var winOverlay: View
+    private lateinit var winCard: View
     private lateinit var bannerAdContainer: FrameLayout
     private var bannerAd: AdView? = null
     private var rewardedAd: RewardedAd? = null
@@ -94,6 +99,7 @@ class MainActivity : Activity(), GameView.GameListener {
         rewardedAdStatus = findViewById(R.id.rewardedAdStatus)
         neckBar = findViewById(R.id.neckBar)
         winOverlay = findViewById(R.id.winOverlay)
+        winCard = findViewById(R.id.winCard)
         bannerAdContainer = findViewById(R.id.bannerAdContainer)
         val btnReset: Button = findViewById(R.id.btnReset)
         btnNext = findViewById(R.id.btnNext)
@@ -101,6 +107,8 @@ class MainActivity : Activity(), GameView.GameListener {
         val btnStartGame: Button = findViewById(R.id.btnStartGame)
         val btnLevels: Button = findViewById(R.id.btnLevels)
         val btnLevelsBack: Button = findViewById(R.id.btnLevelsBack)
+        listOf(btnReset, btnNext, btnWinHome, btnStartGame, btnLevels, btnLevelsBack)
+            .forEach { addPressFeedback(it) }
 
         val preferences = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
         if (!preferences.contains(KEY_HIGHEST_COMPLETED_LEVEL)) {
@@ -118,12 +126,12 @@ class MainActivity : Activity(), GameView.GameListener {
             gameView.setStartingLevel(highestLevel)
             homeScreen.visibility = View.GONE
             hideMenuBanner()
-            gameScreen.visibility = View.VISIBLE
+            showAnimated(gameScreen)
             startLevelTimer(highestLevel)
         }
         btnLevels.setOnClickListener {
             homeScreen.visibility = View.GONE
-            levelsScreen.visibility = View.VISIBLE
+            showAnimated(levelsScreen)
             updateLevels()
             showMenuBanner()
         }
@@ -147,7 +155,7 @@ class MainActivity : Activity(), GameView.GameListener {
         Handler(Looper.getMainLooper()).postDelayed({
             if (!isFinishing) {
                 loadingScreen.visibility = View.GONE
-                homeScreen.visibility = View.VISIBLE
+                showAnimated(homeScreen)
             }
         }, LOADING_DURATION_MS)
     }
@@ -324,10 +332,9 @@ class MainActivity : Activity(), GameView.GameListener {
                     (6 * density).toInt(),
                     (10 * density).toInt(),
                     (6 * density).toInt(),
-                    (10 * density).toInt()
+                    (14 * density).toInt()
                 )
                 background = getDrawable(R.drawable.bg_level_card)
-                elevation = 3 * density
                 isClickable = true
                 isFocusable = true
                 contentDescription = getString(
@@ -340,36 +347,59 @@ class MainActivity : Activity(), GameView.GameListener {
                     winOverlay.visibility = View.GONE
                     levelsScreen.visibility = View.GONE
                     hideMenuBanner()
-                    gameScreen.visibility = View.VISIBLE
+                    showAnimated(gameScreen)
                     startLevelTimer(level)
                 }
             }
+            addPressFeedback(card)
 
             val levelNumber = TextView(this).apply {
                 text = level.toString()
-                setTextColor(getColor(R.color.outline_dark))
+                setTextColor(getColor(R.color.wall_blue))
                 textSize = 30f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                typeface = Typeface.create("sans-serif-black", Typeface.NORMAL)
                 gravity = Gravity.CENTER
+                includeFontPadding = false
             }
             val completedLabel = TextView(this).apply {
                 text = getString(R.string.level_completed)
-                setTextColor(getColor(R.color.hud_top))
-                textSize = 9f
-                letterSpacing = 0.06f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setTextColor(getColor(R.color.success_text))
+                textSize = 8.5f
+                letterSpacing = 0.08f
+                typeface = Typeface.create("sans-serif-black", Typeface.NORMAL)
                 gravity = Gravity.CENTER
+                background = getDrawable(R.drawable.bg_pill_success)
+                setPadding(
+                    (8 * density).toInt(),
+                    (2 * density).toInt(),
+                    (8 * density).toInt(),
+                    (2 * density).toInt()
+                )
             }
             val timeLabel = TextView(this).apply {
                 text = getString(R.string.level_last_time_format, lastClearTime)
                 setTextColor(getColor(R.color.outline_dark))
+                alpha = 0.7f
                 textSize = 10f
+                typeface = Typeface.MONOSPACE
                 gravity = Gravity.CENTER
                 maxLines = 1
             }
             card.addView(levelNumber)
-            card.addView(completedLabel)
-            card.addView(timeLabel)
+            card.addView(
+                completedLabel,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = (6 * density).toInt() }
+            )
+            card.addView(
+                timeLabel,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = (6 * density).toInt() }
+            )
 
             val params = GridLayout.LayoutParams().apply {
                 width = tileWidth
@@ -380,12 +410,55 @@ class MainActivity : Activity(), GameView.GameListener {
         }
     }
 
+    // ------------------------------------------------------------- UI polish
+
+    /** Fades a screen in instead of popping it on instantly. */
+    private fun showAnimated(view: View) {
+        if (view.visibility == View.VISIBLE) return
+        view.animate().cancel()
+        view.alpha = 0f
+        view.visibility = View.VISIBLE
+        view.animate().alpha(1f).setDuration(200L).start()
+    }
+
+    /** Fades the dim overlay in and pops the result card with a small overshoot. */
+    private fun showWinOverlay() {
+        winOverlay.animate().cancel()
+        winOverlay.alpha = 0f
+        winOverlay.visibility = View.VISIBLE
+        winOverlay.animate().alpha(1f).setDuration(220L).start()
+
+        winCard.animate().cancel()
+        winCard.scaleX = 0.85f
+        winCard.scaleY = 0.85f
+        winCard.animate()
+            .scaleX(1f)
+            .scaleY(1f)
+            .setDuration(340L)
+            .setInterpolator(OvershootInterpolator(1.2f))
+            .start()
+    }
+
+    /** Subtle "squish" while a button/card is held down. Clicks still go through. */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun addPressFeedback(view: View) {
+        view.setOnTouchListener { v, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN ->
+                    v.animate().scaleX(0.96f).scaleY(0.96f).setDuration(80L).start()
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                    v.animate().scaleX(1f).scaleY(1f).setDuration(120L).start()
+            }
+            false
+        }
+    }
+
     private fun showHomeScreen() {
         stopLevelTimer()
         winOverlay.visibility = View.GONE
         levelsScreen.visibility = View.GONE
         gameScreen.visibility = View.GONE
-        homeScreen.visibility = View.VISIBLE
+        showAnimated(homeScreen)
         showMenuBanner()
         updateHighScore()
     }
@@ -448,7 +521,7 @@ class MainActivity : Activity(), GameView.GameListener {
             .putLong(lastClearTimeKey(level), clearTime)
             .apply()
         winSubtitle.text = getString(R.string.next_level_format, level + 1)
-        winOverlay.visibility = View.VISIBLE
+        showWinOverlay()
         updateRewardedAdPrompt()
         if (rewardedAd == null && !isRewardedAdLoading) {
             loadRewardedAd()
