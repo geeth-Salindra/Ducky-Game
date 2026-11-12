@@ -28,10 +28,24 @@ import kotlin.random.Random
  * This view only draws the game world. HUD / buttons / win screen live in XML
  * (activity_main.xml) and are driven through [GameListener].
  *
- * Game rules, maze generation, neck logic and the public API are unchanged.
- * Added on top: polished rendering (tubular walls, floor, animated fish, expressive
- * duck), touch feedback, wall-bump / neck-limit feedback with haptics, idle hints,
- * a level intro animation and a win celebration.
+ * The existing public API is unchanged (new members are additive).
+ *
+ * What's new in this version
+ *  - Trap paths: every maze is a "perfect" maze (exactly ONE route from the duck to the fish,
+ *    no loops) with many more dead-end branches. When the neck reaches the tip of a dead end it
+ *    gets STUCK and locks. Tap the "Stuck!" banner, call [undo], or call [resetLevel] to get out.
+ *    Dead-end tips carry a faint red mark (toggle with [showTrapMarks]); [onStuck] is notified.
+ *  - Smoother controls: the neck speeds up while you keep dragging, stable multi-touch
+ *    handling (the first finger owns the game), no accidental parent scrolling.
+ *  - Star rating on every win (1-3 stars, based on how directly you reached the fish),
+ *    shown on the board and exposed through [onStarsEarned].
+ *  - [undo] to retract one step, [isWon], [lastStars], [moveCount], [hapticsEnabled].
+ *  - More expressive duck: looks at the fish when idle, gets worried (brow + sweat drop)
+ *    when the neck is almost at its limit.
+ *  - Better feedback: board shake on wall bumps, goal tile pulse, start-pad marker,
+ *    brighter final hint dot, sparkle trail while moving.
+ *  - Robustness: pointer-id tracking, animation restart after re-attach, no per-frame
+ *    allocations in the draw path.
  */
 class GameView @JvmOverloads constructor(
     context: Context,
@@ -53,7 +67,11 @@ class GameView @JvmOverloads constructor(
         private const val LEFT = 3
         private val DC = intArrayOf(0, 1, 0, -1)
         private val DR = intArrayOf(-1, 0, 1, 0)
-        private const val STEP_MS = 85L
+
+        // movement pacing: starts calm, speeds up while the finger keeps dragging
+        private const val STEP_START_MS = 95L
+        private const val STEP_MIN_MS = 60L
+        private const val STEP_RAMP_MS = 5L
 
         // result of trying to move the head
         private const val MOVED = 0
@@ -65,9 +83,15 @@ class GameView @JvmOverloads constructor(
         private const val HINT_IDLE_MS = 9000L
         private const val HINT_LEN = 6
         private const val BUMP_FX_MS = 260L
+        private const val RESCUE_STEP_MS = 80L
         private const val INTRO_S = 0.35f
         private const val MAX_PARTICLES = 220
         private const val BG_BUBBLES = 14
+        private const val WORRY_RATIO = 0.85f
+
+        // star rating thresholds (moves taken / minimum moves)
+        private const val THREE_STAR_RATIO = 1.25f
+        private const val TWO_STAR_RATIO = 1.9f
 
         // particle kinds
         private const val P_CONFETTI = 0
@@ -95,6 +119,8 @@ class GameView @JvmOverloads constructor(
         private val C_STRAIN_ORANGE = 0xFFFF8A3D.toInt()
         private val C_STRAIN_RED = 0xFFFF5252.toInt()
         private val C_CHEEK = 0x66FF6B6B.toInt()
+        private val C_SWEAT = 0xFF7DE0FF.toInt()
+        private val C_STAR_EMPTY = 0xFF6C7BC9.toInt()
         private val CONFETTI_COLORS = intArrayOf(
             0xFFFFD43B.toInt(), 0xFFFF9F1C.toInt(), 0xFFFFFFFF.toInt(),
             0xFF7DE0FF.toInt(), 0xFFFF7EB6.toInt(), 0xFF6BEA8B.toInt()
@@ -127,12 +153,33 @@ class GameView @JvmOverloads constructor(
     private var fishC = 0
     private var fishR = 0
     private var maxNeck = 0
+    private var shortestCells = 1
     private var lastDir = DOWN
     private var won = false
+    private var moves = 0
+    private var stars = 0
+
+    // trap state
+    private var stuck = false
+    private var rescuing = false
+    private var lastRescueStep = 0L
+    private var stuckAmt = 0f
+    private var lastDizzyAt = 0L
+    private var onRoute: Array<BooleanArray> = emptyArray()    // cells on the one true route
+    private var deadEnd: Array<BooleanArray> = emptyArray()    // trap tips
+    private val deadCells = ArrayList<IntArray>()              // {col,row} of every trap tip
+    private var pillL = 0f
+    private var pillT = 0f
+    private var pillR = 0f
+    private var pillB = 0f
+
+    // input state
     private var touching = false
     private var touchX = 0f
     private var touchY = 0f
     private var lastStep = 0L
+    private var activePointer = -1
+    private var streak = 0
 
     // layout
     private var viewW = 0
@@ -157,9 +204,12 @@ class GameView @JvmOverloads constructor(
     private var lastBumpFx = 0L
     private var touchAlpha = 0f
     private var lastBubbleAt = 0L
+    private var lastTrailAt = 0L
     private var bodyOffY = 0f
     private var drawHeadX = 0f
     private var drawHeadY = 0f
+    private var shakeX = 0f
+    private var worry = 0f
 
     // hint
     private var lastProgress = 0L
@@ -190,6 +240,10 @@ class GameView @JvmOverloads constructor(
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
+    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.CENTER
+        isFakeBoldText = true
+    }
     private val path = Path()
     private val rect = RectF()
 
@@ -197,6 +251,37 @@ class GameView @JvmOverloads constructor(
 
     val currentLevel: Int
         get() = level
+
+    /** True once the duck has reached the fish on the current level. */
+    val isWon: Boolean
+        get() = won
+
+    /** Stars (1-3) earned on the current level; 0 until the level is won. */
+    val lastStars: Int
+        get() = stars
+
+    /** Number of moves (steps and retractions) made on the current level. */
+    val moveCount: Int
+        get() = moves
+
+    /** Turn haptic feedback on or off (e.g. from a settings screen). */
+    var hapticsEnabled: Boolean = true
+
+    /** Draw the star rating on the board after a win. */
+    var showWinStars: Boolean = true
+
+    /** Optional callback with the star rating of a won level. Called right before [GameListener.onWin]. */
+    var onStarsEarned: ((level: Int, stars: Int) -> Unit)? = null
+
+    /** True while the neck is stuck in a dead end and must be pulled back (tap banner, [undo] or [resetLevel]). */
+    val isStuck: Boolean
+        get() = stuck
+
+    /** Draw a faint mark at the tip of every dead-end (trap) path. */
+    var showTrapMarks: Boolean = true
+
+    /** Optional callback fired when the neck gets stuck in a dead end. */
+    var onStuck: ((level: Int) -> Unit)? = null
 
     fun setListener(l: GameListener?) {
         gameListener = l
@@ -227,6 +312,26 @@ class GameView @JvmOverloads constructor(
         hintDirty = true
     }
 
+    /**
+     * Pulls the neck back by one cell (handy for an "Undo" button). Does nothing at the start or after a win.
+     * When the neck is stuck in a dead end it pulls the whole neck back out of the trap.
+     */
+    fun undo() {
+        if (won || rescuing) return
+        if (stuck) {
+            startRescue()
+            return
+        }
+        if (neck.size < 2) return
+        val removed = neck.removeAt(neck.size - 1)
+        val now = neck[neck.size - 1]
+        lastDir = dirBetween(removed[0], removed[1], now[0], now[1])
+        moves++
+        onMoved()
+        notifyNeck()
+        haptic(HapticFeedbackConstants.CLOCK_TICK)
+    }
+
     private fun notifyLevel() {
         gameListener?.onLevelChanged(level)
     }
@@ -236,6 +341,19 @@ class GameView @JvmOverloads constructor(
     }
 
     // ------------------------------------------------------------------ setup
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        lastFrame = 0L
+        invalidate()
+    }
+
+    override fun onDetachedFromWindow() {
+        touching = false
+        activePointer = -1
+        lastFrame = 0L
+        super.onDetachedFromWindow()
+    }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
@@ -269,11 +387,13 @@ class GameView @JvmOverloads constructor(
         val free = viewH - topSpace - bottomSpace - rows * cell
         oy = topSpace + max(0f, free / 2f)
 
-        generateMaze()
         fishC = cols - 1
         fishR = rows - 1
+        generateMaze()
+        analyzeMaze()
 
         val dist = shortestPathCells()
+        shortestCells = dist
         val factor = max(1.4f, 2.4f - 0.12f * level)
         maxNeck = ceil(dist * factor).toInt()
 
@@ -285,7 +405,16 @@ class GameView @JvmOverloads constructor(
         headX = bodyX
         headY = bodyY
         won = false
+        moves = 0
+        stars = 0
         touching = false
+        activePointer = -1
+        streak = 0
+        stuck = false
+        rescuing = false
+        stuckAmt = 0f
+        pillR = 0f
+        pillL = 0f
 
         // visual state
         buildWallPath()
@@ -297,12 +426,15 @@ class GameView @JvmOverloads constructor(
         stepPulse = 0f
         bump = 0f
         strain = 0f
+        worry = 0f
+        shakeX = 0f
         touchAlpha = 0f
         hintAlpha = 0f
         hintCount = 0
         hintDirty = true
         lastProgress = SystemClock.uptimeMillis()
         lastBubbleAt = lastProgress
+        lastTrailAt = lastProgress
         drawHeadX = headX
         drawHeadY = headY
 
@@ -311,15 +443,39 @@ class GameView @JvmOverloads constructor(
     }
 
     private fun generateMaze() {
-        wall = Array(rows) { Array(cols) { BooleanArray(4) { true } } }
+        var bestMaze: Array<Array<BooleanArray>>? = null
+        var bestScore = -1
+        repeat(24) {
+            wall = Array(rows) { Array(cols) { BooleanArray(4) { true } } }
+            carveMaze()
+            if (!isPerfectMaze()) return@repeat   // must have exactly one route
+            val score = mazeDifficultyScore()
+            if (score > bestScore) {
+                bestScore = score
+                val candidate = wall
+                bestMaze = Array(rows) { r ->
+                    Array(cols) { c -> candidate[r][c].copyOf() }
+                }
+            }
+        }
+        wall = checkNotNull(bestMaze)
+    }
 
+    /**
+     * Growing-tree carving. It always produces a spanning tree, so there is exactly ONE route
+     * between any two cells. Mixing "newest cell" and "random cell" picks gives long winding
+     * corridors plus lots of side branches (the dead-end traps). Higher levels branch more.
+     */
+    private fun carveMaze() {
         val vis = Array(rows) { BooleanArray(cols) }
-        val stack = ArrayDeque<IntArray>()
-        stack.push(intArrayOf(0, 0))
+        val active = ArrayList<IntArray>()
+        active.add(intArrayOf(0, 0))
         vis[0][0] = true
-        while (stack.isNotEmpty()) {
-            val cur = stack.peek()!!
-            val options = IntArray(4)
+        val bias = (0.78f - 0.03f * level).coerceIn(0.45f, 0.78f)
+        val options = IntArray(4)
+        while (active.isNotEmpty()) {
+            val idx = if (Random.nextFloat() < bias) active.size - 1 else Random.nextInt(active.size)
+            val cur = active[idx]
             var n = 0
             for (d in 0..3) {
                 val nc = cur[0] + DC[d]
@@ -329,7 +485,7 @@ class GameView @JvmOverloads constructor(
                 }
             }
             if (n == 0) {
-                stack.pop()
+                active.removeAt(idx)
             } else {
                 val d = options[Random.nextInt(n)]
                 val nc = cur[0] + DC[d]
@@ -337,7 +493,142 @@ class GameView @JvmOverloads constructor(
                 wall[cur[1]][cur[0]][d] = false
                 wall[nr][nc][(d + 2) % 4] = false
                 vis[nr][nc] = true
-                stack.push(intArrayOf(nc, nr))
+                active.add(intArrayOf(nc, nr))
+            }
+        }
+    }
+
+    private fun mazeDifficultyScore(): Int {
+        val parent = Array(rows) { IntArray(cols) { -1 } }
+        val q = ArrayDeque<IntArray>()
+        parent[0][0] = 0
+        q.add(intArrayOf(0, 0))
+        while (q.isNotEmpty()) {
+            val cur = q.poll()!!
+            if (cur[0] == fishC && cur[1] == fishR) break
+            for (d in 0..3) {
+                if (wall[cur[1]][cur[0]][d]) continue
+                val nc = cur[0] + DC[d]
+                val nr = cur[1] + DR[d]
+                if (parent[nr][nc] == -1) {
+                    parent[nr][nc] = cur[1] * cols + cur[0]
+                    q.add(intArrayOf(nc, nr))
+                }
+            }
+        }
+
+        val route = ArrayList<Int>()
+        var node = fishR * cols + fishC
+        while (node != 0) {
+            route.add(node)
+            node = parent[node / cols][node % cols]
+        }
+        route.add(0)
+        var turns = 0
+        var previousDirection = -1
+        for (i in 1 until route.size) {
+            val previous = route[i - 1]
+            val current = route[i]
+            val dc = current % cols - previous % cols
+            val dr = current / cols - previous / cols
+            val direction = when {
+                dc > 0 -> RIGHT
+                dc < 0 -> LEFT
+                dr > 0 -> DOWN
+                else -> UP
+            }
+            if (previousDirection >= 0 && direction != previousDirection) turns++
+            previousDirection = direction
+        }
+        return route.size + turns * 2 + countDeadEnds() * 3
+    }
+
+    private fun openCount(r: Int, c: Int): Int {
+        var n = 0
+        for (d in 0..3) if (!wall[r][c][d]) n++
+        return n
+    }
+
+    private fun countDeadEnds(): Int {
+        var n = 0
+        for (r in 0 until rows) {
+            for (c in 0 until cols) {
+                if (r == 0 && c == 0) continue
+                if (c == fishC && r == fishR) continue
+                if (openCount(r, c) == 1) n++
+            }
+        }
+        return n
+    }
+
+    /** A perfect maze is fully connected with no loops: passages == cells - 1, so only ONE route exists. */
+    private fun isPerfectMaze(): Boolean {
+        var links = 0
+        for (r in 0 until rows) {
+            for (c in 0 until cols) {
+                if (!wall[r][c][RIGHT]) links++
+                if (!wall[r][c][DOWN]) links++
+            }
+        }
+        if (links != rows * cols - 1) return false
+        val seen = Array(rows) { BooleanArray(cols) }
+        val q = ArrayDeque<IntArray>()
+        q.add(intArrayOf(0, 0))
+        seen[0][0] = true
+        var count = 1
+        while (q.isNotEmpty()) {
+            val cur = q.poll()!!
+            for (d in 0..3) {
+                if (wall[cur[1]][cur[0]][d]) continue
+                val nc = cur[0] + DC[d]
+                val nr = cur[1] + DR[d]
+                if (!seen[nr][nc]) {
+                    seen[nr][nc] = true
+                    count++
+                    q.add(intArrayOf(nc, nr))
+                }
+            }
+        }
+        return count == rows * cols
+    }
+
+    /** Marks the single true route and every dead-end tip (the traps). */
+    private fun analyzeMaze() {
+        onRoute = Array(rows) { BooleanArray(cols) }
+        deadEnd = Array(rows) { BooleanArray(cols) }
+        deadCells.clear()
+
+        val parent = Array(rows) { IntArray(cols) { -1 } }
+        val q = ArrayDeque<IntArray>()
+        parent[0][0] = 0
+        q.add(intArrayOf(0, 0))
+        while (q.isNotEmpty()) {
+            val cur = q.poll()!!
+            for (d in 0..3) {
+                if (wall[cur[1]][cur[0]][d]) continue
+                val nc = cur[0] + DC[d]
+                val nr = cur[1] + DR[d]
+                if (parent[nr][nc] == -1) {
+                    parent[nr][nc] = cur[1] * cols + cur[0]
+                    q.add(intArrayOf(nc, nr))
+                }
+            }
+        }
+        var node = fishR * cols + fishC
+        while (node >= 0) {
+            onRoute[node / cols][node % cols] = true
+            if (node == 0) break
+            node = parent[node / cols][node % cols]
+        }
+
+        for (r in 0 until rows) {
+            for (c in 0 until cols) {
+                if (r == 0 && c == 0) continue
+                if (c == fishC && r == fishR) continue
+                if (openCount(r, c) == 1) {
+                    deadEnd[r][c] = true
+                    deadCells.add(intArrayOf(c, r))
+                }
             }
         }
     }
@@ -414,6 +705,13 @@ class GameView @JvmOverloads constructor(
         else -> 0f
     }
 
+    private fun dirBetween(fromC: Int, fromR: Int, toC: Int, toR: Int): Int = when {
+        toC > fromC -> RIGHT
+        toC < fromC -> LEFT
+        toR > fromR -> DOWN
+        else -> UP
+    }
+
     private fun withAlpha(color: Int, a: Float): Int {
         val alpha = (((color ushr 24) and 0xFF) * a.coerceIn(0f, 1f)).toInt()
         return (alpha shl 24) or (color and 0x00FFFFFF)
@@ -437,8 +735,10 @@ class GameView @JvmOverloads constructor(
     }
 
     private fun haptic(constant: Int) {
-        performHapticFeedback(constant)
+        if (hapticsEnabled) performHapticFeedback(constant)
     }
+
+    private fun neckRatio(): Float = if (maxNeck == 0) 0f else neck.size / maxNeck.toFloat()
 
     // ------------------------------------------------------------------ logic
 
@@ -446,9 +746,32 @@ class GameView @JvmOverloads constructor(
         introT = min(1f, introT + dt / INTRO_S)
         winT = if (won) (now - wonAt) / 1000f else 0f
 
-        if (touching && !won && now - lastStep >= STEP_MS) {
-            stepToward(touchX, touchY)
-            lastStep = now
+        // automatic pull-back out of a trap
+        if (rescuing && !won && now - lastRescueStep >= RESCUE_STEP_MS) {
+            lastRescueStep = now
+            if (neck.size > 1) {
+                val removed = neck.removeAt(neck.size - 1)
+                val to = neck[neck.size - 1]
+                lastDir = dirBetween(removed[0], removed[1], to[0], to[1])
+                moves++
+                onMoved()
+                notifyNeck()
+                haptic(HapticFeedbackConstants.CLOCK_TICK)
+            }
+            val hd = neck[neck.size - 1]
+            if (neck.size <= 1 || onRoute[hd[1]][hd[0]]) {
+                rescuing = false
+                stuck = false
+            }
+        }
+
+        // held finger moves the neck; it speeds up the longer you keep dragging
+        if (touching && !won && !stuck) {
+            val interval = max(STEP_MIN_MS, STEP_START_MS - streak * STEP_RAMP_MS)
+            if (now - lastStep >= interval) {
+                if (stepToward(touchX, touchY)) streak++ else streak = 0
+                lastStep = now
+            }
         }
 
         // head glides toward the last neck cell (frame-rate independent)
@@ -463,6 +786,24 @@ class GameView @JvmOverloads constructor(
         strain = max(0f, strain - dt * 2.2f)
         val touchTarget = if (touching) 1f else 0f
         touchAlpha += (touchTarget - touchAlpha) * min(1f, dt * 14f)
+
+        // duck gets nervous when the neck is nearly at its limit
+        val worryTarget = if (!won && neckRatio() >= WORRY_RATIO) 1f else 0f
+        worry += (worryTarget - worry) * min(1f, dt * 6f)
+
+        // stuck-in-a-trap feedback: banner fades in, dizzy stars circle the head
+        val stuckTarget = if (stuck && !rescuing && !won) 1f else 0f
+        stuckAmt += (stuckTarget - stuckAmt) * min(1f, dt * 8f)
+        if (stuckTarget > 0f && now - lastDizzyAt > 240L) {
+            lastDizzyAt = now
+            addParticle(
+                Particle(
+                    headX + (Random.nextFloat() - 0.5f) * cell * 0.6f, headY - cell * 0.38f,
+                    (Random.nextFloat() - 0.5f) * cell * 0.8f, -cell * 0.45f,
+                    0.6f, cell * (0.06f + Random.nextFloat() * 0.03f), C_YELLOW_LIGHT, P_SPARKLE
+                )
+            )
+        }
 
         // hint
         val idle = !won && now - lastProgress > HINT_IDLE_MS
@@ -491,6 +832,9 @@ class GameView @JvmOverloads constructor(
         drawHeadX = hx
         drawHeadY = hy
 
+        // tiny board shake when you bump into a wall
+        shakeX = if (bump > 0f) sin(now / 16.0).toFloat() * bump * cell * 0.025f else 0f
+
         // little bubbles rising from the fish
         if (!won && now - lastBubbleAt > 850L) {
             lastBubbleAt = now
@@ -500,6 +844,18 @@ class GameView @JvmOverloads constructor(
                 C_WHITE, P_BUBBLE
             )
             p.rot = Random.nextFloat() * 6.28f
+            addParticle(p)
+        }
+
+        // sparkle trail behind the head while the finger is moving it
+        if (touching && !won && stepPulse > 0.5f && now - lastTrailAt > 70L) {
+            lastTrailAt = now
+            val p = Particle(
+                headX + (Random.nextFloat() - 0.5f) * cell * 0.3f,
+                headY + (Random.nextFloat() - 0.5f) * cell * 0.3f,
+                0f, -cell * 0.25f, 0.45f, cell * (0.06f + Random.nextFloat() * 0.04f),
+                C_YELLOW_LIGHT, P_SPARKLE
+            )
             addParticle(p)
         }
 
@@ -591,14 +947,15 @@ class GameView @JvmOverloads constructor(
         }
     }
 
-    private fun stepToward(tx: Float, ty: Float) {
+    /** Returns true if the neck moved (stretched or retracted). */
+    private fun stepToward(tx: Float, ty: Float): Boolean {
         val h = neck[neck.size - 1]
         val dx = tx - cx(h[0])
         val dy = ty - cy(h[1])
         val ax = abs(dx)
         val ay = abs(dy)
         val dead = cell * 0.25f
-        if (ax < dead && ay < dead) return
+        if (ax < dead && ay < dead) return false
 
         val dirX = if (dx > 0) RIGHT else LEFT
         val dirY = if (dy > 0) DOWN else UP
@@ -612,15 +969,16 @@ class GameView @JvmOverloads constructor(
             second = if (ax > dead) dirX else -1
         }
         val r1 = tryMove(h, first)
-        if (r1 == MOVED) return
+        if (r1 == MOVED) return true
         var r2 = BLOCKED_WALL
         if (second >= 0) {
             r2 = tryMove(h, second)
-            if (r2 == MOVED) return
+            if (r2 == MOVED) return true
         }
         // nothing moved: tell the player why
         val limit = r1 == BLOCKED_LIMIT || r2 == BLOCKED_LIMIT
         onBlocked(limit, first)
+        return false
     }
 
     private fun tryMove(h: IntArray, d: Int): Int {
@@ -634,6 +992,7 @@ class GameView @JvmOverloads constructor(
             if (prev[0] == nc && prev[1] == nr) {
                 neck.removeAt(neck.size - 1)
                 lastDir = d
+                moves++
                 onMoved()
                 notifyNeck()
                 return MOVED
@@ -644,15 +1003,32 @@ class GameView @JvmOverloads constructor(
 
         neck.add(intArrayOf(nc, nr))
         lastDir = d
+        moves++
         onMoved()
         notifyNeck()
         if (nc == fishC && nr == fishR) {
             won = true
             touching = false
+            activePointer = -1
+            stars = computeStars()
             celebrate()
+            onStarsEarned?.invoke(level, stars)
             gameListener?.onWin(level)
+        } else if (deadEnd[nr][nc]) {
+            enterStuck()
         }
         return MOVED
+    }
+
+    /** 3 stars for a (nearly) direct route, 2 for a fair one, 1 for a wandering one. */
+    private fun computeStars(): Int {
+        val best = max(1, shortestCells - 1)
+        val ratio = moves / best.toFloat()
+        return when {
+            ratio <= THREE_STAR_RATIO -> 3
+            ratio <= TWO_STAR_RATIO -> 2
+            else -> 1
+        }
     }
 
     private fun onMoved() {
@@ -668,6 +1044,13 @@ class GameView @JvmOverloads constructor(
         if (limit) {
             strain = 1f
             haptic(HapticFeedbackConstants.KEYBOARD_TAP)
+            // a drop of sweat flies off the nervous duck
+            addParticle(
+                Particle(
+                    headX + cell * 0.25f, headY - cell * 0.3f,
+                    cell * 0.6f, -cell * 0.9f, 0.5f, cell * 0.06f, C_SWEAT, P_SPARKLE
+                )
+            )
         } else {
             bump = 1f
             bumpDir = dir
@@ -678,6 +1061,42 @@ class GameView @JvmOverloads constructor(
             )
             addParticle(p)
         }
+    }
+
+    /** The head reached the tip of a dead end: lock the neck until the player pulls back. */
+    private fun enterStuck() {
+        stuck = true
+        rescuing = false
+        touching = false
+        activePointer = -1
+        streak = 0
+        bump = 1f
+        bumpDir = lastDir
+        strain = 1f
+        lastDizzyAt = 0L
+        haptic(HapticFeedbackConstants.LONG_PRESS)
+        val h = neck[neck.size - 1]
+        addParticle(Particle(cx(h[0]), cy(h[1]), 0f, 0f, 0.5f, cell * 0.2f, C_STRAIN_RED, P_RING))
+        addParticle(
+            Particle(
+                cx(h[0]) + DC[lastDir] * cell * 0.4f, cy(h[1]) + DR[lastDir] * cell * 0.4f,
+                0f, 0f, 0.35f, cell * 0.12f, C_WHITE, P_PUFF
+            )
+        )
+        onStuck?.invoke(level)
+    }
+
+    /** Pulls the neck back out of the trap, one cell at a time, until it is on the true route again. */
+    private fun startRescue() {
+        if (!stuck || rescuing || won) return
+        rescuing = true
+        lastRescueStep = 0L
+    }
+
+    private fun hitPill(x: Float, y: Float): Boolean {
+        if (stuckAmt < 0.3f || pillR <= pillL) return false
+        val slop = cell * 0.25f
+        return x >= pillL - slop && x <= pillR + slop && y >= pillT - slop && y <= pillB + slop
     }
 
     private fun celebrate() {
@@ -721,20 +1140,45 @@ class GameView @JvmOverloads constructor(
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                if (won) return true
+                if (won || rescuing) return true
+                if (stuck) {
+                    if (hitPill(e.x, e.y)) startRescue() else onBlocked(true, lastDir)
+                    return true
+                }
+                parent?.requestDisallowInterceptTouchEvent(true)
+                activePointer = e.getPointerId(0)
                 touching = true
                 touchX = e.x
                 touchY = e.y
+                streak = 0
+                lastStep = 0L // first step happens on the very next frame
                 addParticle(Particle(e.x, e.y, 0f, 0f, 0.4f, cell * 0.14f, C_WHITE, P_RING))
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
-                touchX = e.x
-                touchY = e.y
+                val idx = e.findPointerIndex(activePointer)
+                if (idx >= 0) {
+                    touchX = e.getX(idx)
+                    touchY = e.getY(idx)
+                }
+                return true
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                // if the controlling finger lifts while another is down, hand control over smoothly
+                if (e.getPointerId(e.actionIndex) == activePointer) {
+                    val newIdx = if (e.actionIndex == 0) 1 else 0
+                    if (newIdx < e.pointerCount) {
+                        activePointer = e.getPointerId(newIdx)
+                        touchX = e.getX(newIdx)
+                        touchY = e.getY(newIdx)
+                    }
+                }
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 touching = false
+                activePointer = -1
+                streak = 0
                 return true
             }
         }
@@ -755,6 +1199,7 @@ class GameView @JvmOverloads constructor(
         // the whole play field pops in at the start of a level
         val s = 0.88f + 0.12f * easeOutBack(introT)
         canvas.save()
+        canvas.translate(shakeX, 0f)
         canvas.scale(s, s, viewW / 2f, viewH / 2f)
         drawMaze(canvas, now)
         drawFish(canvas, now)
@@ -767,6 +1212,8 @@ class GameView @JvmOverloads constructor(
         canvas.restore()
 
         drawParticles(canvas)
+        drawWinStars(canvas)
+        drawStuckBanner(canvas, now)
         drawTouch(canvas, now)
 
         postInvalidateOnAnimation()
@@ -818,15 +1265,19 @@ class GameView @JvmOverloads constructor(
                 }
             }
         }
-        // start pad + goal tile
+        // start pad
         fill.color = withAlpha(C_WHITE, 0.2f)
         canvas.drawRect(ox, oy, ox + cell, oy + cell, fill)
+        // goal tile (gently pulsing)
         if (!won) {
-            fill.color = withAlpha(C_YELLOW, 0.24f)
+            val pulse = 0.5f + 0.5f * sin(now / 400.0).toFloat()
+            fill.color = withAlpha(C_YELLOW, 0.20f + 0.08f * pulse)
             canvas.drawRect(ox + fishC * cell, oy + fishR * cell, ox + (fishC + 1) * cell, oy + (fishR + 1) * cell, fill)
         }
         canvas.restore()
 
+        drawStartMarker(canvas, now)
+        drawDeadEnds(canvas, now)
         drawHint(canvas, now)
 
         // walls: shadow, dark edge, body, highlight
@@ -838,14 +1289,30 @@ class GameView @JvmOverloads constructor(
         canvas.restore()
 
         stroke.color = C_WALL_DARK
-        stroke.strokeWidth = cell * 0.13f
+        stroke.strokeWidth = cell * 0.15f
         canvas.drawPath(wallPath, stroke)
         stroke.color = C_WALL
-        stroke.strokeWidth = cell * 0.09f
+        stroke.strokeWidth = cell * 0.11f
         canvas.drawPath(wallPath, stroke)
         stroke.color = 0x4DFFFFFF
         stroke.strokeWidth = cell * 0.025f
         canvas.drawPath(wallPath, stroke)
+    }
+
+    /** Small chevron pointing into the maze at the start cell, visible until the first move. */
+    private fun drawStartMarker(canvas: Canvas, now: Long) {
+        if (won || neck.size > 1) return
+        val bounce = (0.5f + 0.5f * sin(now / 300.0).toFloat()) * cell * 0.06f
+        val x = cx(0)
+        val y = oy + cell * 0.32f + bounce
+        val s = cell * 0.13f
+        path.reset()
+        path.moveTo(x - s, y - s * 0.5f)
+        path.lineTo(x, y + s * 0.5f)
+        path.lineTo(x + s, y - s * 0.5f)
+        stroke.color = withAlpha(C_WHITE, 0.75f)
+        stroke.strokeWidth = cell * 0.045f
+        canvas.drawPath(path, stroke)
     }
 
     private fun drawHint(canvas: Canvas, now: Long) {
@@ -952,9 +1419,9 @@ class GameView @JvmOverloads constructor(
         buildNeckPath(drawHeadX, drawHeadY, bodyY + bodyOffY)
 
         // neck turns orange/red as it reaches its limit
-        val ratio = if (maxNeck == 0) 0f else neck.size / maxNeck.toFloat()
-        var color = lerpColor(C_YELLOW, C_STRAIN_ORANGE, (ratio - 0.75f) / 0.25f)
+        var color = lerpColor(C_YELLOW, C_STRAIN_ORANGE, (neckRatio() - 0.75f) / 0.25f)
         if (strain > 0f) color = lerpColor(color, C_STRAIN_RED, strain)
+        if (stuckAmt > 0f) color = lerpColor(color, C_STRAIN_RED, 0.7f * stuckAmt)
 
         stroke.color = C_OUTLINE
         stroke.strokeWidth = cell * 0.46f
@@ -1022,11 +1489,13 @@ class GameView @JvmOverloads constructor(
         canvas.drawPath(path, fill)
         canvas.restore()
 
+        // wing (flaps on a win)
+        val flap = if (won && winT < 1.6f) sin(winT * 22f) * cell * 0.05f else 0f
         rect.set(
             bodyX - cell * 0.43f,
-            bodyY - cell * 0.10f,
+            bodyY - cell * 0.10f + flap,
             bodyX + cell * 0.35f,
-            bodyY + cell * 0.34f
+            bodyY + cell * 0.34f + flap
         )
         fill.color = C_OUTLINE
         canvas.drawOval(rect, fill)
@@ -1035,11 +1504,11 @@ class GameView @JvmOverloads constructor(
         canvas.drawOval(rect, fill)
 
         path.reset()
-        path.moveTo(bodyX - cell * 0.27f, bodyY + cell * 0.12f)
+        path.moveTo(bodyX - cell * 0.27f, bodyY + cell * 0.12f + flap)
         path.cubicTo(
-            bodyX - cell * 0.10f, bodyY + cell * 0.30f,
-            bodyX + cell * 0.13f, bodyY + cell * 0.29f,
-            bodyX + cell * 0.27f, bodyY + cell * 0.16f
+            bodyX - cell * 0.10f, bodyY + cell * 0.30f + flap,
+            bodyX + cell * 0.13f, bodyY + cell * 0.29f + flap,
+            bodyX + cell * 0.27f, bodyY + cell * 0.16f + flap
         )
         stroke.color = C_YELLOW_DARK
         stroke.strokeWidth = cell * 0.035f
@@ -1133,7 +1602,7 @@ class GameView @JvmOverloads constructor(
         fill.color = C_CHEEK
         canvas.drawCircle(r * 0.18f, r * 0.42f, r * 0.2f, fill)
 
-        // eye: happy on win, blinks now and then, pupil follows the finger
+        // eye: happy on win, blinks now and then, pupil follows the finger (or the fish)
         if (won) {
             path.reset()
             path.moveTo(r * 0.02f, -r * 0.34f)
@@ -1141,24 +1610,33 @@ class GameView @JvmOverloads constructor(
             stroke.color = C_OUTLINE
             stroke.strokeWidth = r * 0.15f
             canvas.drawPath(path, stroke)
+        } else if (stuck) {
+            // dizzy X eye
+            val ex = r * 0.3f
+            val ey = -r * 0.4f
+            val xs = r * 0.18f
+            stroke.color = C_OUTLINE
+            stroke.strokeWidth = r * 0.13f
+            canvas.drawLine(ex - xs, ey - xs, ex + xs, ey + xs, stroke)
+            canvas.drawLine(ex - xs, ey + xs, ex + xs, ey - xs, stroke)
         } else if (now % 3400L < 120L) {
             stroke.color = C_OUTLINE
             stroke.strokeWidth = r * 0.13f
             canvas.drawLine(r * 0.04f, -r * 0.4f, r * 0.5f, -r * 0.4f, stroke)
         } else {
+            val targetX = if (touchAlpha > 0.1f) touchX else cx(fishC)
+            val targetY = if (touchAlpha > 0.1f) touchY else cy(fishR)
+            val tdx = targetX - drawHeadX
+            val tdy = targetY - drawHeadY
+            val a = Math.toRadians(angleOf(lastDir).toDouble())
+            val lx = (tdx * cos(a) + tdy * sin(a)).toFloat()
+            val ly = (-tdx * sin(a) + tdy * cos(a)).toFloat()
+            val len = sqrt(lx * lx + ly * ly)
             var lookX = 0f
             var lookY = 0f
-            if (touchAlpha > 0.1f) {
-                val tdx = touchX - drawHeadX
-                val tdy = touchY - drawHeadY
-                val a = Math.toRadians(angleOf(lastDir).toDouble())
-                val lx = (tdx * cos(a) + tdy * sin(a)).toFloat()
-                val ly = (-tdx * sin(a) + tdy * cos(a)).toFloat()
-                val len = sqrt(lx * lx + ly * ly)
-                if (len > 1f) {
-                    lookX = lx / len * r * 0.07f
-                    lookY = ly / len * r * 0.07f
-                }
+            if (len > 1f) {
+                lookX = lx / len * r * 0.07f
+                lookY = ly / len * r * 0.07f
             }
             fill.color = C_WHITE
             canvas.drawCircle(r * 0.25f, -r * 0.4f, r * 0.28f, fill)
@@ -1166,8 +1644,32 @@ class GameView @JvmOverloads constructor(
             canvas.drawCircle(r * 0.32f + lookX, -r * 0.4f + lookY, r * 0.14f, fill)
             fill.color = C_WHITE
             canvas.drawCircle(r * 0.36f + lookX, -r * 0.46f + lookY, r * 0.05f, fill)
+
+            // worried brow when the neck is almost at its limit
+            if (worry > 0.05f) {
+                stroke.color = withAlpha(C_OUTLINE, worry)
+                stroke.strokeWidth = r * 0.1f
+                canvas.drawLine(r * 0.02f, -r * 0.86f, r * 0.5f, -r * 0.7f, stroke)
+            }
         }
         canvas.restore()
+
+        // sweat drop (drawn upright, outside the rotated head frame)
+        if (worry > 0.05f && !won) {
+            val sx = drawHeadX + r * 0.9f
+            val sy = drawHeadY - r * 1.2f + sin(now / 160.0).toFloat() * r * 0.08f
+            val s = r * 0.3f * worry
+            path.reset()
+            path.moveTo(sx, sy - s)
+            path.quadTo(sx + s * 0.95f, sy + s * 0.25f, sx, sy + s)
+            path.quadTo(sx - s * 0.95f, sy + s * 0.25f, sx, sy - s)
+            path.close()
+            fill.color = withAlpha(C_SWEAT, worry)
+            canvas.drawPath(path, fill)
+            stroke.color = withAlpha(C_OUTLINE, 0.7f * worry)
+            stroke.strokeWidth = r * 0.06f
+            canvas.drawPath(path, stroke)
+        }
     }
 
     private fun drawParticles(canvas: Canvas) {
@@ -1187,7 +1689,7 @@ class GameView @JvmOverloads constructor(
                 }
                 P_SPARKLE -> {
                     fill.color = withAlpha(p.color, a)
-                    drawStar(canvas, p.x, p.y, p.size * (1f - t))
+                    drawSparkle(canvas, p.x, p.y, p.size * (1f - t))
                 }
                 P_PUFF -> {
                     fill.color = withAlpha(C_WHITE, a * 0.55f)
@@ -1207,7 +1709,7 @@ class GameView @JvmOverloads constructor(
         }
     }
 
-    private fun drawStar(canvas: Canvas, x: Float, y: Float, s: Float) {
+    private fun drawSparkle(canvas: Canvas, x: Float, y: Float, s: Float) {
         if (s <= 0.5f) return
         path.reset()
         path.moveTo(x, y - s)
@@ -1217,6 +1719,97 @@ class GameView @JvmOverloads constructor(
         path.quadTo(x, y, x, y - s)
         path.close()
         canvas.drawPath(path, fill)
+    }
+
+    /** Builds a 5-point star into [path]. */
+    private fun buildStarPath(x: Float, y: Float, outer: Float, inner: Float) {
+        path.reset()
+        for (i in 0 until 10) {
+            val ang = (-Math.PI / 2.0 + i * Math.PI / 5.0).toFloat()
+            val rad = if (i % 2 == 0) outer else inner
+            val px = x + cos(ang) * rad
+            val py = y + sin(ang) * rad
+            if (i == 0) path.moveTo(px, py) else path.lineTo(px, py)
+        }
+        path.close()
+    }
+
+    /** Star rating that pops in over the board after a win. */
+    private fun drawWinStars(canvas: Canvas) {
+        if (!won || !showWinStars) return
+        val fade = ((3.4f - winT) / 0.5f).coerceIn(0f, 1f)
+        if (fade <= 0f) return
+
+        val midX = viewW / 2f
+        val midY = oy + rows * cell * 0.5f
+        val size = cell * 0.55f
+        val gap = cell * 1.25f
+        for (i in 0..2) {
+            val t = ((winT - 0.45f - i * 0.2f) / 0.45f).coerceIn(0f, 1f)
+            if (t <= 0f) continue
+            val sc = easeOutBack(t)
+            val x = midX + (i - 1) * gap
+            val y = midY - if (i == 1) cell * 0.2f else 0f
+            buildStarPath(x, y, size * sc, size * sc * 0.45f)
+            fill.color = withAlpha(if (i < stars) C_YELLOW else C_STAR_EMPTY, fade)
+            canvas.drawPath(path, fill)
+            stroke.color = withAlpha(C_OUTLINE, fade)
+            stroke.strokeWidth = cell * 0.06f
+            canvas.drawPath(path, stroke)
+        }
+    }
+
+    /** Faint red mark at the tip of every dead-end path so traps read as traps. */
+    private fun drawDeadEnds(canvas: Canvas, now: Long) {
+        if (won || !showTrapMarks) return
+        val pulse = 0.5f + 0.5f * sin(now / 600.0).toFloat()
+        val s = cell * 0.07f
+        for (i in 0 until deadCells.size) {
+            val d = deadCells[i]
+            val x = cx(d[0])
+            val y = cy(d[1])
+            fill.color = withAlpha(C_STRAIN_RED, 0.14f + 0.05f * pulse)
+            canvas.drawCircle(x, y, cell * 0.2f, fill)
+            stroke.color = withAlpha(C_WALL_DARK, 0.45f)
+            stroke.strokeWidth = cell * 0.04f
+            canvas.drawLine(x - s, y - s, x + s, y + s, stroke)
+            canvas.drawLine(x - s, y + s, x + s, y - s, stroke)
+        }
+    }
+
+    /** "Stuck!" pill next to the duck. Tapping it pulls the neck back out of the trap. */
+    private fun drawStuckBanner(canvas: Canvas, now: Long) {
+        if (stuckAmt < 0.02f || won) {
+            pillR = 0f
+            pillL = 0f
+            return
+        }
+        val a = stuckAmt
+        val w = cell * 3.5f
+        val h = cell * 0.62f
+        val midX = viewW - ox - w / 2f
+        val midY = oy - cell * 0.85f
+        pillL = midX - w / 2f
+        pillR = midX + w / 2f
+        pillT = midY - h / 2f
+        pillB = midY + h / 2f
+        val pulse = 0.5f + 0.5f * sin(now / 220.0).toFloat()
+
+        rect.set(pillL, pillT + cell * 0.05f, pillR, pillB + cell * 0.05f)
+        fill.color = withAlpha(C_OUTLINE, 0.35f * a)
+        canvas.drawRoundRect(rect, h / 2f, h / 2f, fill)
+
+        rect.set(pillL, pillT, pillR, pillB)
+        fill.color = withAlpha(lerpColor(C_STRAIN_ORANGE, C_STRAIN_RED, pulse), a)
+        canvas.drawRoundRect(rect, h / 2f, h / 2f, fill)
+        stroke.color = withAlpha(C_OUTLINE, a)
+        stroke.strokeWidth = cell * 0.05f
+        canvas.drawRoundRect(rect, h / 2f, h / 2f, stroke)
+
+        textPaint.textSize = cell * 0.25f
+        textPaint.color = withAlpha(C_WHITE, a)
+        val baseline = midY - (textPaint.descent() + textPaint.ascent()) / 2f
+        canvas.drawText("Stuck! Tap to pull back", midX, baseline, textPaint)
     }
 
     /** Soft ring under the finger so touch input feels responsive. */
