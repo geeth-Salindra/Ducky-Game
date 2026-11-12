@@ -7,15 +7,8 @@
     <string name="reset">RESET</string>
     <string name="fish_caught">Fish caught!</string>
     <string name="next_level_format">Level %1$d is next</string>
-    <string name="watch_ad_to_continue">WATCH AD TO CONTINUE</string>
-    <string name="rewarded_ad_loading_button">LOADING AD…</string>
-    <string name="retry_ad">RETRY AD</string>
-    <string name="rewarded_ad_loading">Loading a reward ad…</string>
-    <string name="rewarded_ad_ready">Watch the ad to unlock the next level.</string>
-    <string name="rewarded_ad_watch_to_continue">Watch the ad to continue to the next level.</string>
-    <string name="rewarded_ad_reward_earned">Reward earned. The next level will start when the ad closes.</string>
-    <string name="rewarded_ad_not_completed">The ad was not completed. Watch it to unlock the next level.</string>
-    <string name="rewarded_ad_unavailable">The ad is unavailable. Tap below to try again.</string>
+    <string name="next_level">NEXT LEVEL</string>
+    <string name="interstitial_ad_optional">An ad may appear sometimes. You can always continue.</string>
     <string name="home_subtitle">Catch fish and make your way through the maze!</string>
     <string name="high_score_label">HIGH SCORE</string>
     <string name="high_score_format">Level %1$d</string>

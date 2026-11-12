@@ -183,12 +183,12 @@
                         android:textSize="15sp" />
 
                     <TextView
-                        android:id="@+id/rewardedAdStatus"
+                        android:id="@+id/interstitialAdStatus"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="18dp"
                         android:gravity="center"
-                        android:text="@string/rewarded_ad_loading"
+                        android:text="@string/interstitial_ad_optional"
                         android:textColor="@color/text_secondary"
                         android:textSize="13sp" />
 
@@ -198,8 +198,8 @@
                         android:layout_width="match_parent"
                         android:layout_height="58dp"
                         android:layout_marginTop="16dp"
-                        android:enabled="false"
-                        android:text="@string/rewarded_ad_loading_button"
+                        android:enabled="true"
+                        android:text="@string/next_level"
                         android:textSize="16sp" />
 
                     <Button
