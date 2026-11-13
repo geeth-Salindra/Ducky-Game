@@ -5,6 +5,9 @@
     <string name="elapsed_time_format">%1$02d:%2$02d.%3$02d</string>
     <string name="neck_label">NECK</string>
     <string name="reset">RESET</string>
+    <string name="pause">Pause</string>
+    <string name="paused">PAUSED</string>
+    <string name="resume">RESUME</string>
     <string name="fish_caught">Fish caught!</string>
     <string name="next_level_format">Level %1$d is next</string>
     <string name="next_level">NEXT LEVEL</string>

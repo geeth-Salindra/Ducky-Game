@@ -20,6 +20,7 @@ import android.view.animation.OvershootInterpolator
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.GridLayout
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -46,6 +47,8 @@ class MainActivity : Activity(), GameView.GameListener {
         private const val KEY_HIGH_SCORE = "high_score"
         private const val KEY_HIGHEST_COMPLETED_LEVEL = "highest_completed_level"
         private const val LOADING_DURATION_MS = 500L
+        private const val COUNTDOWN_INTERVAL_MS = 1_000L
+        private const val COUNTDOWN_START = 3
         private const val TIMER_UPDATE_INTERVAL_MS = 50L
         private const val KEY_LAST_CLEAR_TIME_PREFIX = "last_clear_time_"
     }
@@ -62,9 +65,14 @@ class MainActivity : Activity(), GameView.GameListener {
     private lateinit var levelText: TextView
     private lateinit var winSubtitle: TextView
     private lateinit var interstitialAdStatus: TextView
+    private lateinit var pauseMessage: TextView
     private lateinit var btnNext: Button
+    private lateinit var btnReset: Button
+    private lateinit var btnResume: Button
+    private lateinit var btnPause: ImageButton
     private lateinit var neckBar: ProgressBar
     private lateinit var winOverlay: View
+    private lateinit var pauseOverlay: View
     private lateinit var winCard: View
     private lateinit var bannerAdContainer: FrameLayout
     private var bannerAd: AdView? = null
@@ -72,12 +80,33 @@ class MainActivity : Activity(), GameView.GameListener {
     private var isInterstitialAdLoading = false
     private val timerHandler = Handler(Looper.getMainLooper())
     private var timerStartedAt = 0L
+    private var timerAccumulatedMs = 0L
     private var timerLevel = 0
     private var timerRunning = false
+    private var countdownRemaining = 0
+    private var countdownActive = false
+    private val countdownHandler = Handler(Looper.getMainLooper())
+    private val countdownTick = object : Runnable {
+        override fun run() {
+            if (!countdownActive) return
+            countdownRemaining--
+            if (countdownRemaining > 0) {
+                showCountdownNumber()
+                countdownHandler.postDelayed(this, COUNTDOWN_INTERVAL_MS)
+            } else {
+                countdownActive = false
+                pauseOverlay.visibility = View.GONE
+                gameView.resumeGame()
+                btnPause.isEnabled = true
+                btnReset.isEnabled = true
+                resumeLevelTimer()
+            }
+        }
+    }
     private val timerUpdate = object : Runnable {
         override fun run() {
             if (!timerRunning) return
-            updateTimerText(SystemClock.elapsedRealtime() - timerStartedAt)
+            updateTimerText(timerAccumulatedMs + SystemClock.elapsedRealtime() - timerStartedAt)
             timerHandler.postDelayed(this, TIMER_UPDATE_INTERVAL_MS)
         }
     }
@@ -100,17 +129,21 @@ class MainActivity : Activity(), GameView.GameListener {
         levelText = findViewById(R.id.levelText)
         winSubtitle = findViewById(R.id.winSubtitle)
         interstitialAdStatus = findViewById(R.id.interstitialAdStatus)
+        pauseMessage = findViewById(R.id.pauseMessage)
         neckBar = findViewById(R.id.neckBar)
         winOverlay = findViewById(R.id.winOverlay)
+        pauseOverlay = findViewById(R.id.pauseOverlay)
         winCard = findViewById(R.id.winCard)
         bannerAdContainer = findViewById(R.id.bannerAdContainer)
-        val btnReset: Button = findViewById(R.id.btnReset)
+        btnReset = findViewById(R.id.btnReset)
         btnNext = findViewById(R.id.btnNext)
+        btnPause = findViewById(R.id.btnPause)
+        btnResume = findViewById(R.id.btnResume)
         val btnWinHome: Button = findViewById(R.id.btnWinHome)
         val btnStartGame: Button = findViewById(R.id.btnStartGame)
         val btnLevels: Button = findViewById(R.id.btnLevels)
         val btnLevelsBack: Button = findViewById(R.id.btnLevelsBack)
-        listOf(btnReset, btnNext, btnWinHome, btnStartGame, btnLevels, btnLevelsBack)
+        listOf(btnReset, btnNext, btnPause, btnResume, btnWinHome, btnStartGame, btnLevels, btnLevelsBack)
             .forEach { addPressFeedback(it) }
 
         val preferences = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
@@ -130,7 +163,12 @@ class MainActivity : Activity(), GameView.GameListener {
             homeScreen.visibility = View.GONE
             hideMenuBanner()
             showAnimated(gameScreen)
-            startLevelTimer(highestLevel)
+            btnPause.isEnabled = true
+            beginCountdown()
+        }
+        btnPause.setOnClickListener { pauseGame() }
+        btnResume.setOnClickListener {
+            if (gameView.isPaused && !countdownActive) beginCountdown()
         }
         btnLevels.setOnClickListener {
             homeScreen.visibility = View.GONE
@@ -142,6 +180,7 @@ class MainActivity : Activity(), GameView.GameListener {
         btnReset.setOnClickListener {
             winOverlay.visibility = View.GONE
             gameView.resetLevel()
+            btnPause.isEnabled = true
             startLevelTimer(gameView.currentLevel)
         }
         btnNext.setOnClickListener {
@@ -287,6 +326,7 @@ class MainActivity : Activity(), GameView.GameListener {
     private fun startNextLevel() {
         winOverlay.visibility = View.GONE
         btnNext.isEnabled = true
+        btnPause.isEnabled = true
         gameView.nextLevel()
         startLevelTimer(gameView.currentLevel)
     }
@@ -344,7 +384,8 @@ class MainActivity : Activity(), GameView.GameListener {
                     levelsScreen.visibility = View.GONE
                     hideMenuBanner()
                     showAnimated(gameScreen)
-                    startLevelTimer(level)
+                    btnPause.isEnabled = true
+                    beginCountdown()
                 }
             }
             addPressFeedback(card)
@@ -450,6 +491,10 @@ class MainActivity : Activity(), GameView.GameListener {
     }
 
     private fun showHomeScreen() {
+        countdownHandler.removeCallbacks(countdownTick)
+        countdownActive = false
+        pauseOverlay.visibility = View.GONE
+        gameView.pauseGame()
         stopLevelTimer()
         winOverlay.visibility = View.GONE
         levelsScreen.visibility = View.GONE
@@ -486,7 +531,9 @@ class MainActivity : Activity(), GameView.GameListener {
 
     override fun onLevelChanged(level: Int) {
         levelText.text = getString(R.string.level_format, level)
-        if (gameScreen.visibility == View.VISIBLE && (!timerRunning || timerLevel != level)) {
+        if (gameScreen.visibility == View.VISIBLE && !countdownActive &&
+            (!timerRunning || timerLevel != level)
+        ) {
             startLevelTimer(level)
         }
         val preferences = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
@@ -508,6 +555,7 @@ class MainActivity : Activity(), GameView.GameListener {
 
     override fun onWin(level: Int) {
         val clearTime = stopLevelTimer()
+        btnPause.isEnabled = false
         val preferences = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
         preferences.edit()
             .putInt(
@@ -524,6 +572,7 @@ class MainActivity : Activity(), GameView.GameListener {
 
     private fun startLevelTimer(level: Int) {
         timerLevel = level
+        timerAccumulatedMs = 0L
         timerStartedAt = SystemClock.elapsedRealtime()
         timerRunning = true
         timerHandler.removeCallbacks(timerUpdate)
@@ -531,16 +580,78 @@ class MainActivity : Activity(), GameView.GameListener {
         timerHandler.post(timerUpdate)
     }
 
+    private fun resumeLevelTimer() {
+        if (timerRunning) return
+        timerLevel = gameView.currentLevel
+        timerStartedAt = SystemClock.elapsedRealtime()
+        timerRunning = true
+        timerHandler.removeCallbacks(timerUpdate)
+        updateTimerText(timerAccumulatedMs)
+        timerHandler.post(timerUpdate)
+    }
+
+    private fun pauseLevelTimer() {
+        if (!timerRunning) return
+        timerAccumulatedMs += SystemClock.elapsedRealtime() - timerStartedAt
+        timerRunning = false
+        timerHandler.removeCallbacks(timerUpdate)
+        updateTimerText(timerAccumulatedMs)
+    }
+
     private fun stopLevelTimer(): Long {
-        val elapsed = if (timerRunning) {
+        val elapsed = timerAccumulatedMs + if (timerRunning) {
             SystemClock.elapsedRealtime() - timerStartedAt
         } else {
             0L
         }
         timerRunning = false
+        timerAccumulatedMs = 0L
         timerHandler.removeCallbacks(timerUpdate)
         updateTimerText(elapsed)
         return elapsed
+    }
+
+    private fun pauseGame() {
+        if (gameView.isPaused || countdownActive || winOverlay.visibility == View.VISIBLE) return
+        gameView.pauseGame()
+        pauseLevelTimer()
+        pauseMessage.text = getString(R.string.paused)
+        pauseMessage.animate().cancel()
+        pauseMessage.alpha = 1f
+        pauseMessage.scaleX = 1f
+        pauseMessage.scaleY = 1f
+        btnResume.visibility = View.VISIBLE
+        btnPause.isEnabled = false
+        btnReset.isEnabled = false
+        pauseOverlay.visibility = View.VISIBLE
+    }
+
+    private fun beginCountdown() {
+        gameView.pauseGame()
+        countdownHandler.removeCallbacks(countdownTick)
+        countdownRemaining = COUNTDOWN_START
+        countdownActive = true
+        if (!timerRunning && timerAccumulatedMs == 0L) updateTimerText(0L)
+        btnPause.isEnabled = false
+        btnReset.isEnabled = false
+        btnResume.visibility = View.GONE
+        pauseOverlay.visibility = View.VISIBLE
+        showCountdownNumber()
+        countdownHandler.postDelayed(countdownTick, COUNTDOWN_INTERVAL_MS)
+    }
+
+    private fun showCountdownNumber() {
+        pauseMessage.text = countdownRemaining.toString()
+        pauseMessage.animate().cancel()
+        pauseMessage.alpha = 0f
+        pauseMessage.scaleX = 0.6f
+        pauseMessage.scaleY = 0.6f
+        pauseMessage.animate()
+            .alpha(1f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .setDuration(300L)
+            .start()
     }
 
     private fun updateTimerText(elapsedMs: Long) {
@@ -573,6 +684,8 @@ class MainActivity : Activity(), GameView.GameListener {
     }
 
     override fun onDestroy() {
+        countdownHandler.removeCallbacks(countdownTick)
+        timerHandler.removeCallbacks(timerUpdate)
         bannerAd?.destroy()
         bannerAd = null
         super.onDestroy()

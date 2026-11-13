@@ -194,6 +194,8 @@ class GameView @JvmOverloads constructor(
 
     // animation / feedback state
     private var lastFrame = 0L
+    private var gamePaused = false
+    private var pausedAt = 0L
     private var introT = 0f
     private var wonAt = 0L
     private var winT = 0f
@@ -252,6 +254,9 @@ class GameView @JvmOverloads constructor(
     val currentLevel: Int
         get() = level
 
+    val isPaused: Boolean
+        get() = gamePaused
+
     /** True once the duck has reached the fish on the current level. */
     val isWon: Boolean
         get() = won
@@ -298,6 +303,32 @@ class GameView @JvmOverloads constructor(
 
     fun resetLevel() {
         if (viewW > 0) newLevel()
+    }
+
+    fun pauseGame() {
+        if (gamePaused || won) return
+        gamePaused = true
+        pausedAt = SystemClock.uptimeMillis()
+        touching = false
+        activePointer = -1
+        streak = 0
+        lastFrame = 0L
+        invalidate()
+    }
+
+    fun resumeGame() {
+        if (!gamePaused) return
+        val pausedDuration = (SystemClock.uptimeMillis() - pausedAt).coerceAtLeast(0L)
+        lastProgress += pausedDuration
+        lastBubbleAt += pausedDuration
+        lastTrailAt += pausedDuration
+        lastDizzyAt += pausedDuration
+        lastRescueStep += pausedDuration
+        lastStep += pausedDuration
+        gamePaused = false
+        pausedAt = 0L
+        lastFrame = 0L
+        invalidate()
     }
 
     fun nextLevel() {
@@ -433,6 +464,7 @@ class GameView @JvmOverloads constructor(
         hintCount = 0
         hintDirty = true
         lastProgress = SystemClock.uptimeMillis()
+        if (gamePaused) pausedAt = lastProgress
         lastBubbleAt = lastProgress
         lastTrailAt = lastProgress
         drawHeadX = headX
@@ -1138,6 +1170,7 @@ class GameView @JvmOverloads constructor(
 
     @Suppress("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (gamePaused) return true
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 if (won || rescuing) return true
@@ -1189,10 +1222,12 @@ class GameView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         if (wall.isEmpty()) return
-        val now = SystemClock.uptimeMillis()
-        val dt = if (lastFrame == 0L) 0.016f else ((now - lastFrame) / 1000f).coerceIn(0f, 0.05f)
-        lastFrame = now
-        update(now, dt)
+        val now = if (gamePaused) pausedAt else SystemClock.uptimeMillis()
+        if (!gamePaused) {
+            val dt = if (lastFrame == 0L) 0.016f else ((now - lastFrame) / 1000f).coerceIn(0f, 0.05f)
+            lastFrame = now
+            update(now, dt)
+        }
 
         drawBackground(canvas, now)
 
@@ -1216,7 +1251,7 @@ class GameView @JvmOverloads constructor(
         drawStuckBanner(canvas, now)
         drawTouch(canvas, now)
 
-        postInvalidateOnAnimation()
+        if (!gamePaused) postInvalidateOnAnimation()
     }
 
     private fun drawBackground(canvas: Canvas, now: Long) {
