@@ -32,4 +32,7 @@
     <string name="no_completed_levels">Complete a level to unlock it here.</string>
     <string name="completed_level_format">Level %1$d\nLast: %2$s</string>
     <string name="no_clear_time">--:--.--</string>
+    <string name="privacy_policy">Privacy policy</string>
+    <string name="privacy_policy_url" translatable="false"></string>
+    <string name="privacy_options">Privacy options</string>
 </resources>

@@ -1,12 +1,13 @@
 package com.geethdev.ducky
 
 import android.annotation.SuppressLint
-import android.app.Activity
+import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -24,6 +25,8 @@ import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import com.google.android.gms.ads.AdListener
 import com.google.android.gms.ads.AdRequest
 import com.google.android.gms.ads.AdSize
@@ -33,9 +36,12 @@ import com.google.android.gms.ads.LoadAdError
 import com.google.android.gms.ads.MobileAds
 import com.google.android.gms.ads.interstitial.InterstitialAd
 import com.google.android.gms.ads.interstitial.InterstitialAdLoadCallback
+import com.google.android.ump.ConsentInformation
+import com.google.android.ump.ConsentRequestParameters
+import com.google.android.ump.UserMessagingPlatform
 import kotlin.random.Random
 
-class MainActivity : Activity(), GameView.GameListener {
+class MainActivity : ComponentActivity(), GameView.GameListener {
 
     companion object {
         private const val TAG = "DuckyAds"
@@ -75,9 +81,13 @@ class MainActivity : Activity(), GameView.GameListener {
     private lateinit var pauseOverlay: View
     private lateinit var winCard: View
     private lateinit var bannerAdContainer: FrameLayout
+    private lateinit var privacyPolicyButton: Button
+    private lateinit var privacyOptionsButton: Button
     private var bannerAd: AdView? = null
     private var interstitialAd: InterstitialAd? = null
     private var isInterstitialAdLoading = false
+    private var consentInformation: ConsentInformation? = null
+    private var isAdsSdkInitialized = false
     private val timerHandler = Handler(Looper.getMainLooper())
     private var timerStartedAt = 0L
     private var timerAccumulatedMs = 0L
@@ -135,6 +145,8 @@ class MainActivity : Activity(), GameView.GameListener {
         pauseOverlay = findViewById(R.id.pauseOverlay)
         winCard = findViewById(R.id.winCard)
         bannerAdContainer = findViewById(R.id.bannerAdContainer)
+        privacyPolicyButton = findViewById(R.id.btnPrivacyPolicy)
+        privacyOptionsButton = findViewById(R.id.btnPrivacyOptions)
         btnReset = findViewById(R.id.btnReset)
         btnNext = findViewById(R.id.btnNext)
         btnPause = findViewById(R.id.btnPause)
@@ -145,6 +157,8 @@ class MainActivity : Activity(), GameView.GameListener {
         val btnLevelsBack: Button = findViewById(R.id.btnLevelsBack)
         listOf(btnReset, btnNext, btnPause, btnResume, btnWinHome, btnStartGame, btnLevels, btnLevelsBack)
             .forEach { addPressFeedback(it) }
+        addPressFeedback(privacyPolicyButton)
+        addPressFeedback(privacyOptionsButton)
 
         val preferences = getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
         if (!preferences.contains(KEY_HIGHEST_COMPLETED_LEVEL)) {
@@ -197,6 +211,37 @@ class MainActivity : Activity(), GameView.GameListener {
             }
         }
         btnWinHome.setOnClickListener { showHomeScreen() }
+        val privacyPolicyUri = getString(R.string.privacy_policy_url)
+            .takeIf(String::isNotBlank)
+            ?.let(Uri::parse)
+            ?.takeIf { it.scheme == "https" && !it.host.isNullOrBlank() }
+        privacyPolicyButton.visibility =
+            if (privacyPolicyUri == null) View.GONE else View.VISIBLE
+        privacyPolicyButton.setOnClickListener {
+            privacyPolicyUri?.let { uri ->
+                startActivity(Intent(Intent.ACTION_VIEW, uri))
+            }
+        }
+        privacyOptionsButton.setOnClickListener {
+            UserMessagingPlatform.showPrivacyOptionsForm(this) { formError ->
+                if (formError != null) {
+                    Log.w(TAG, "Privacy options form failed: ${formError.message}")
+                }
+                refreshAdsAfterConsent()
+            }
+        }
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                when {
+                    gameScreen.visibility == View.VISIBLE -> {
+                        winOverlay.visibility = View.GONE
+                        showHomeScreen()
+                    }
+                    levelsScreen.visibility == View.VISIBLE -> showHomeScreen()
+                    else -> finish()
+                }
+            }
+        })
         initializeAds()
 
         Handler(Looper.getMainLooper()).postDelayed({
@@ -208,10 +253,60 @@ class MainActivity : Activity(), GameView.GameListener {
     }
 
     private fun initializeAds() {
+        val information = UserMessagingPlatform.getConsentInformation(this)
+        consentInformation = information
+        val params = ConsentRequestParameters.Builder().build()
+        information.requestConsentInfoUpdate(
+            this,
+            params,
+            {
+                updatePrivacyOptionsButton()
+                UserMessagingPlatform.loadAndShowConsentFormIfRequired(this) { formError ->
+                    if (formError != null) {
+                        Log.w(TAG, "Consent form failed: ${formError.message}")
+                    }
+                    refreshAdsAfterConsent()
+                }
+            },
+            { error ->
+                Log.w(TAG, "Consent information update failed: ${error.message}")
+                updatePrivacyOptionsButton()
+                refreshAdsAfterConsent()
+            }
+        )
+    }
+
+    private fun updatePrivacyOptionsButton() {
+        privacyOptionsButton.visibility =
+            if (consentInformation?.privacyOptionsRequirementStatus ==
+                ConsentInformation.PrivacyOptionsRequirementStatus.REQUIRED
+            ) View.VISIBLE else View.GONE
+    }
+
+    private fun refreshAdsAfterConsent() {
+        updatePrivacyOptionsButton()
+        val information = consentInformation ?: return
+        if (!information.canRequestAds()) {
+            interstitialAd = null
+            bannerAd?.destroy()
+            bannerAd = null
+            bannerAdContainer.removeAllViews()
+            bannerAdContainer.visibility = View.GONE
+            return
+        }
+        if (isAdsSdkInitialized) {
+            if (hasInternetConnection()) {
+                if (bannerAd == null) createBannerAd()
+                loadInterstitialAd()
+            }
+            return
+        }
+
+        isAdsSdkInitialized = true
         MobileAds.initialize(this) {
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
-                if (hasInternetConnection()) {
+                if (consentInformation?.canRequestAds() == true && hasInternetConnection()) {
                     createBannerAd()
                     loadInterstitialAd()
                 }
@@ -220,7 +315,7 @@ class MainActivity : Activity(), GameView.GameListener {
     }
 
     private fun createBannerAd() {
-        if (!hasInternetConnection()) return
+        if (consentInformation?.canRequestAds() != true || !hasInternetConnection()) return
 
         val adView = AdView(this)
         adView.adUnitId = BANNER_AD_UNIT_ID
@@ -268,7 +363,7 @@ class MainActivity : Activity(), GameView.GameListener {
     }
 
     private fun loadInterstitialAd() {
-        if (!hasInternetConnection() || isInterstitialAdLoading ||
+        if (consentInformation?.canRequestAds() != true || !hasInternetConnection() || isInterstitialAdLoading ||
             interstitialAd != null || isFinishing || isDestroyed
         ) return
 
@@ -502,18 +597,6 @@ class MainActivity : Activity(), GameView.GameListener {
         showAnimated(homeScreen)
         showMenuBanner()
         updateHighScore()
-    }
-
-    @Deprecated("Deprecated in Android")
-    override fun onBackPressed() {
-        if (gameScreen.visibility == View.VISIBLE) {
-            winOverlay.visibility = View.GONE
-            showHomeScreen()
-        } else if (levelsScreen.visibility == View.VISIBLE) {
-            showHomeScreen()
-        } else {
-            super.onBackPressed()
-        }
     }
 
     @Suppress("DEPRECATION")

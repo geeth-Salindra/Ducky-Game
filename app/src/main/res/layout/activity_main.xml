@@ -391,6 +391,26 @@
                 android:layout_marginTop="14dp"
                 android:text="@string/levels"
                 android:textSize="16sp" />
+
+            <Button
+                android:id="@+id/btnPrivacyPolicy"
+                style="@style/Widget.Ducky.Button.Secondary"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="8dp"
+                android:text="@string/privacy_policy"
+                android:textSize="13sp"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/btnPrivacyOptions"
+                style="@style/Widget.Ducky.Button.Secondary"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="4dp"
+                android:text="@string/privacy_options"
+                android:textSize="13sp"
+                android:visibility="gone" />
         </LinearLayout>
     </ScrollView>
 
